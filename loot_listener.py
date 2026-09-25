@@ -4,6 +4,7 @@ import re
 
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
+
 from telethon.sessions import StringSession
 
 load_dotenv()
@@ -16,9 +17,13 @@ SOURCE_CHANNELS = [
     x.strip()
     for x in os.environ.get(
         "SOURCE_CHANNEL",
-        "@lootdeals2005"
+        "@lootdeals2005,@pricehistory,@lootersindia"
     ).split(",")
     if x.strip()
+]
+
+PRIVATE_CHANNEL_NAMES = [
+    "Offerzone 2.0"
 ]
 
 PRIORITY_KEYWORDS = [
@@ -39,132 +44,59 @@ client = TelegramClient(
 )
 
 seen_messages = set()
+resolved_private_channels = []
 
-
-# =========================
-# PRIORITY CATEGORY
-# =========================
 
 def get_priority_category(text):
     t = text.lower()
 
-    # iPhone: ignore accessories
     iphone_ignore = [
-        "cover",
-        "case",
-        "cable",
-        "charger",
-        "screen protector",
-        "tempered glass",
-        "back glass",
-        "skin",
-        "sleeve",
-        "adapter",
-        "holder",
-        "stand",
-        "lens protector",
-        "camera protector",
-        "strap",
-        "replacement",
-        "battery",
-        "display",
-        "screen",
-        "earphone",
-        "airpods",
-        "watch",
+        "cover", "case", "cable", "charger",
+        "screen protector", "tempered glass",
+        "back glass", "skin", "sleeve", "adapter",
+        "holder", "stand", "lens protector",
+        "camera protector", "strap", "replacement",
+        "battery", "display", "screen",
+        "earphone", "airpods", "watch"
     ]
 
-    # Furniture: ignore accessories/small items
     furniture_ignore = [
-        "cover",
-        "cushion cover",
-        "table cover",
-        "mattress",
-        "bedsheet",
-        "curtain",
-        "pillow",
-        "cleaner",
-        "cleaning",
-        "polish",
-        "hardware",
-        "hinge",
-        "handle",
-        "knob",
-        "screw",
-        "bracket",
-        "stand",
-        "mat",
-        "carpet",
-        "rug",
-        "lamp",
-        "light",
-        "decor",
-        "decoration",
-        "wall art",
-        "clock",
+        "cover", "cushion cover", "table cover",
+        "mattress", "bedsheet", "curtain", "pillow",
+        "cleaner", "cleaning", "polish", "hardware",
+        "hinge", "handle", "knob", "screw",
+        "bracket", "stand", "mat", "carpet", "rug",
+        "lamp", "light", "decor", "decoration",
+        "wall art", "clock"
     ]
 
     for keyword in PRIORITY_KEYWORDS:
 
-        # -------------------------
-        # IPHONE
-        # -------------------------
-
         if keyword == "iphone":
-
             if re.search(r"\biphone\s*(?:11|12|13|14|15|16|17)\b", t):
-
                 if any(word in t for word in iphone_ignore):
                     return None
-
                 return "iphone"
 
-        # -------------------------
-        # FURNITURE
-        # -------------------------
-
         elif keyword == "furniture":
-
             furniture_items = [
-                "sofa",
-                "couch",
-                "recliner",
-                "bed",
-                "wardrobe",
-                "almirah",
-                "dining table",
-                "dining chair",
-                "table",
-                "chair",
-                "bookshelf",
-                "book shelf",
-                "shoe rack",
-                "tv unit",
-                "tv cabinet",
-                "coffee table",
-                "side table",
-                "study table",
-                "office chair",
-                "computer table",
-                "dresser",
-                "cabinet",
-                "drawer",
-                "furniture",
+                "sofa", "couch", "recliner", "bed",
+                "wardrobe", "almirah", "dining table",
+                "dining chair", "table", "chair",
+                "bookshelf", "book shelf", "shoe rack",
+                "tv unit", "tv cabinet", "coffee table",
+                "side table", "study table", "office chair",
+                "computer table", "dresser", "cabinet",
+                "drawer", "furniture"
             ]
 
             if any(item in t for item in furniture_items):
-
                 if any(word in t for word in furniture_ignore):
                     return None
-
                 return "furniture"
 
     return None
 
-
-# =========================
-# NORMAL LOOT FILTER
-# =========================
 
 def is_normal_loot(text):
     t = text.lower()
@@ -194,7 +126,7 @@ def is_normal_loot(text):
         "rs. 1",
         "₹99",
         "rs 99",
-        "99 only",
+        "99 only"
     ]
 
     if any(word in t for word in strong_words):
@@ -211,15 +143,42 @@ def is_normal_loot(text):
     return any(int(x) >= 70 for x in discounts)
 
 
-# =========================
-# MESSAGE HANDLER
-# =========================
+async def resolve_private_channels():
+    global resolved_private_channels
 
-@client.on(events.NewMessage(chats=SOURCE_CHANNELS))
-async def handler(event):
+    resolved_private_channels = []
 
+    print("🔎 Searching private channels...")
+
+    dialogs = await client.get_dialogs()
+
+    for wanted_name in PRIVATE_CHANNEL_NAMES:
+        found = False
+
+        for dialog in dialogs:
+            entity = dialog.entity
+            title = getattr(entity, "title", "")
+
+            if title and title.strip().lower() == wanted_name.lower():
+                resolved_private_channels.append(entity)
+
+                print(
+                    f"✅ Private channel found: {title}"
+                )
+
+                found = True
+                break
+
+        if not found:
+            print(
+                f"⚠️ Private channel not found: {wanted_name}"
+            )
+
+    return resolved_private_channels
+
+
+async def process_message(event):
     try:
-
         text = event.raw_text or ""
 
         if not text.strip():
@@ -246,10 +205,6 @@ async def handler(event):
             return
 
         seen_messages.add(message_key)
-
-        # =========================
-        # CHECK PRIORITY FIRST
-        # =========================
 
         category = get_priority_category(text)
 
@@ -282,38 +237,25 @@ async def handler(event):
         print("-" * 60)
 
     except Exception as e:
-
         print(
             f"❌ Handler error: "
             f"{type(e).__name__}: {e}"
         )
 
 
-# =========================
-# HEARTBEAT
-# =========================
-
 async def heartbeat():
-
     while True:
-
         print(
             "💚 Listener is alive and monitoring..."
         )
-
         await asyncio.sleep(60)
 
-
-# =========================
-# MAIN
-# =========================
 
 async def main():
 
     while True:
 
         try:
-
             print("🔄 Connecting to Telegram...")
 
             await client.connect()
@@ -330,17 +272,40 @@ async def main():
                 f"{me.first_name}"
             )
 
+            # Resolve private channels
+            private_channels = (
+                await resolve_private_channels()
+            )
+
+            # Combine public + private sources
+            all_sources = list(SOURCE_CHANNELS)
+
+            all_sources.extend(private_channels)
+
+            print()
             print("👀 Listening to:")
 
-            for channel in SOURCE_CHANNELS:
-                print(f"   • {channel}")
+            for source in SOURCE_CHANNELS:
+                print(f"   • {source}")
 
+            for source in private_channels:
+                print(
+                    f"   • {getattr(source, 'title', source)}"
+                )
+
+            print()
             print(
                 f"🎯 Priority: "
                 f"{', '.join(PRIORITY_KEYWORDS)}"
             )
 
             print("🟢 Listener is running...")
+
+            # Register handler dynamically
+            client.add_event_handler(
+                process_message,
+                events.NewMessage(chats=all_sources)
+            )
 
             await asyncio.gather(
                 client.run_until_disconnected(),
