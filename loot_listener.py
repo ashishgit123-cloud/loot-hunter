@@ -4,7 +4,6 @@ import re
 
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
-
 from telethon.sessions import StringSession
 
 load_dotenv()
@@ -22,9 +21,10 @@ SOURCE_CHANNELS = [
     if x.strip()
 ]
 
-PRIVATE_CHANNEL_NAMES = [
-    "Offerzone 2.0"
-]
+DESTINATION_CHANNEL = os.environ.get(
+    "DESTINATION_CHANNEL",
+    "@lootersAmer"
+).strip()
 
 PRIORITY_KEYWORDS = [
     x.strip().lower()
@@ -44,7 +44,6 @@ client = TelegramClient(
 )
 
 seen_messages = set()
-resolved_private_channels = []
 
 
 def get_priority_category(text):
@@ -73,12 +72,18 @@ def get_priority_category(text):
     for keyword in PRIORITY_KEYWORDS:
 
         if keyword == "iphone":
-            if re.search(r"\biphone\s*(?:11|12|13|14|15|16|17)\b", t):
+
+            if re.search(
+                r"\biphone\s*(?:11|12|13|14|15|16|17)\b",
+                t
+            ):
                 if any(word in t for word in iphone_ignore):
                     return None
+
                 return "iphone"
 
         elif keyword == "furniture":
+
             furniture_items = [
                 "sofa", "couch", "recliner", "bed",
                 "wardrobe", "almirah", "dining table",
@@ -91,8 +96,13 @@ def get_priority_category(text):
             ]
 
             if any(item in t for item in furniture_items):
-                if any(word in t for word in furniture_ignore):
+
+                if any(
+                    word in t
+                    for word in furniture_ignore
+                ):
                     return None
+
                 return "furniture"
 
     return None
@@ -141,40 +151,6 @@ def is_normal_loot(text):
     )
 
     return any(int(x) >= 70 for x in discounts)
-
-
-async def resolve_private_channels():
-    global resolved_private_channels
-
-    resolved_private_channels = []
-
-    print("🔎 Searching private channels...")
-
-    dialogs = await client.get_dialogs()
-
-    for wanted_name in PRIVATE_CHANNEL_NAMES:
-        found = False
-
-        for dialog in dialogs:
-            entity = dialog.entity
-            title = getattr(entity, "title", "")
-
-            if title and title.strip().lower() == wanted_name.lower():
-                resolved_private_channels.append(entity)
-
-                print(
-                    f"✅ Private channel found: {title}"
-                )
-
-                found = True
-                break
-
-        if not found:
-            print(
-                f"⚠️ Private channel not found: {wanted_name}"
-            )
-
-    return resolved_private_channels
 
 
 async def process_message(event):
@@ -227,16 +203,25 @@ async def process_message(event):
             f"🆔 Post ID: {event.id}"
         )
 
+        # Save a copy in Saved Messages
         await client.send_message("me", alert)
+
+        # Send alert to destination channel
+        await client.send_message(
+            DESTINATION_CHANNEL,
+            alert
+        )
 
         print()
         print("🚨 ALERT SENT")
         print(f"🏷️ Category: {category or 'loot'}")
         print(f"📌 Source: {source}")
+        print(f"📤 Destination: {DESTINATION_CHANNEL}")
         print(text)
         print("-" * 60)
 
     except Exception as e:
+
         print(
             f"❌ Handler error: "
             f"{type(e).__name__}: {e}"
@@ -244,10 +229,13 @@ async def process_message(event):
 
 
 async def heartbeat():
+
     while True:
+
         print(
             "💚 Listener is alive and monitoring..."
         )
+
         await asyncio.sleep(60)
 
 
@@ -256,11 +244,13 @@ async def main():
     while True:
 
         try:
+
             print("🔄 Connecting to Telegram...")
 
             await client.connect()
 
             if not await client.is_user_authorized():
+
                 raise RuntimeError(
                     "Telegram session is not authorized."
                 )
@@ -272,26 +262,11 @@ async def main():
                 f"{me.first_name}"
             )
 
-            # Resolve private channels
-            private_channels = (
-                await resolve_private_channels()
-            )
-
-            # Combine public + private sources
-            all_sources = list(SOURCE_CHANNELS)
-
-            all_sources.extend(private_channels)
-
             print()
             print("👀 Listening to:")
 
             for source in SOURCE_CHANNELS:
                 print(f"   • {source}")
-
-            for source in private_channels:
-                print(
-                    f"   • {getattr(source, 'title', source)}"
-                )
 
             print()
             print(
@@ -299,12 +274,20 @@ async def main():
                 f"{', '.join(PRIORITY_KEYWORDS)}"
             )
 
+            print()
+            print(
+                f"📤 Destination: "
+                f"{DESTINATION_CHANNEL}"
+            )
+
+            print()
             print("🟢 Listener is running...")
 
-            # Register handler dynamically
             client.add_event_handler(
                 process_message,
-                events.NewMessage(chats=all_sources)
+                events.NewMessage(
+                    chats=SOURCE_CHANNELS
+                )
             )
 
             await asyncio.gather(

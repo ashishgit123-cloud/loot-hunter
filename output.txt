@@ -1,7 +1,0 @@
-Please enter your phone (or bot token): Please enter the code you received: Signed in successfully as Ashish; remember to not break the ToS or you will risk an account ban!
-
-LOGIN SUCCEStS
-SESSION STRING:
-oo-PUbYgUnpkQriuGJkAfJW2oQ6J584Iwht--PA6DGOlmX5miM94jPnnDNQz0AYFdfVIfLBY9JDtjVdGfK8Fdgrc4Ub_NBAxpi5Rw02z3WAAO4_uLDRWeWeszKNLUolAT8f6jv9VzY9dJoiNmHvUsM_2kD-nBt0fYdaaMQ296xkI8TU4JaLblwJrZZdHJ6H9IFEFLSyYo_unU0rPNJq-aBCbWM=
-
-1BVtsOJsBu1meHt6TnEIRAdRbpeAsj9yxKXzDHoQ_GsEIx8MDc4D6LiwEpr0SeI6va42
