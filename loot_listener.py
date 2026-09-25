@@ -9,15 +9,12 @@ from telethon.sessions import StringSession
 load_dotenv()
 
 # =========================
-# TELEGRAM CONFIG
+# CONFIG
 # =========================
 
 API_ID = int(os.environ["TG_API_ID"])
 API_HASH = os.environ["TG_API_HASH"]
 TG_SESSION = os.environ["TG_SESSION"]
-
-# Railway variable:
-# @lootdeals2005,@pricehistory,@lootersindia
 
 SOURCE_CHANNELS = [
     x.strip()
@@ -35,10 +32,11 @@ SOURCE_CHANNELS = [
 client = TelegramClient(
     StringSession(TG_SESSION),
     API_ID,
-    API_HASH
+    API_HASH,
+    connection_retries=None,
+    retry_delay=5
 )
 
-# Keep track of processed messages
 seen_messages = set()
 
 
@@ -95,15 +93,12 @@ def looks_like_deal(text):
         "80% discount"
     ]
 
-    # Strong loot keywords
     if any(keyword in t for keyword in strong_keywords):
         return True
 
-    # Extremely low price
     if any(price <= 199 for price in prices):
         return True
 
-    # Very high discount
     percentages = re.findall(
         r"(\d{2,3})\s*%\s*(?:off|discount)",
         t
@@ -117,85 +112,71 @@ def looks_like_deal(text):
 
 
 # =========================
-# NEW MESSAGE HANDLER
+# MESSAGE HANDLER
 # =========================
 
 @client.on(events.NewMessage(chats=SOURCE_CHANNELS))
 async def handler(event):
 
-    text = event.raw_text or ""
+    try:
+        text = event.raw_text or ""
 
-    if not text.strip():
-        return
+        if not text.strip():
+            return
 
-    # Get chat information
-    chat = await event.get_chat()
+        chat = await event.get_chat()
 
-    chat_id = getattr(chat, "id", None)
+        chat_id = getattr(chat, "id", None)
+        username = getattr(chat, "username", None)
+        title = getattr(chat, "title", None)
 
-    username = getattr(
-        chat,
-        "username",
-        None
-    )
+        if username:
+            source = f"@{username}"
+        elif title:
+            source = title
+        else:
+            source = "Telegram Channel"
 
-    title = getattr(
-        chat,
-        "title",
-        None
-    )
+        message_key = (
+            chat_id,
+            event.id
+        )
 
-    # Actual source name
-    if username:
-        source = f"@{username}"
-    elif title:
-        source = title
-    else:
-        source = "Telegram Channel"
+        if message_key in seen_messages:
+            return
 
-    # Unique message identifier
-    message_key = (
-        chat_id,
-        event.id
-    )
+        seen_messages.add(message_key)
 
-    # Duplicate protection
-    if message_key in seen_messages:
-        return
+        if len(seen_messages) > 10000:
+            seen_messages.clear()
 
-    seen_messages.add(message_key)
+        if not looks_like_deal(text):
+            return
 
-    # Prevent unlimited memory growth
-    if len(seen_messages) > 10000:
-        seen_messages.clear()
+        alert = (
+            "🔥🔥 POSSIBLE LOOT DEAL 🔥🔥\n\n"
+            f"{text}\n\n"
+            f"📌 Source: {source}\n"
+            f"🆔 Post ID: {event.id}"
+        )
 
-    # Check whether this looks like a loot deal
-    if not looks_like_deal(text):
-        return
+        await client.send_message(
+            "me",
+            alert
+        )
 
-    # =========================
-    # ALERT
-    # =========================
+        print()
+        print("🚨 ALERT SENT")
+        print(f"📌 Source: {source}")
+        print(f"🆔 Post ID: {event.id}")
+        print(text)
+        print("-" * 60)
 
-    alert = (
-        "🔥🔥 POSSIBLE LOOT DEAL 🔥🔥\n\n"
-        f"{text}\n\n"
-        f"📌 Source: {source}\n"
-        f"🆔 Post ID: {event.id}"
-    )
-
-    # Send to Telegram Saved Messages
-    await client.send_message(
-        "me",
-        alert
-    )
-
-    print()
-    print("🚨 ALERT SENT TO SAVED MESSAGES")
-    print(f"📌 Source: {source}")
-    print(f"🆔 Message ID: {event.id}")
-    print(text)
-    print("-" * 60)
+    except Exception as e:
+        print(
+            f"❌ Handler error: "
+            f"{type(e).__name__}: {e}"
+        )
 
 
 # =========================
@@ -204,34 +185,51 @@ async def handler(event):
 
 async def main():
 
-    await client.connect()
+    while True:
 
-    # Check Telegram authorization
-    if not await client.is_user_authorized():
-        raise RuntimeError(
-            "Telegram session is not authorized."
-        )
+        try:
+            print("🔄 Connecting to Telegram...")
 
-    # Get logged-in account
-    me = await client.get_me()
+            await client.connect()
 
-    print(
-        f"✅ Telegram connected as: "
-        f"{me.first_name}"
-    )
+            if not await client.is_user_authorized():
+                raise RuntimeError(
+                    "Telegram session is not authorized."
+                )
 
-    # Show all monitored channels
-    print(
-        "👀 Listening to:"
-    )
+            me = await client.get_me()
 
-    for channel in SOURCE_CHANNELS:
-        print(f"   • {channel}")
+            print(
+                f"✅ Telegram connected as: "
+                f"{me.first_name}"
+            )
 
-    print()
+            print("👀 Listening to:")
 
-    # Keep listener running
-    await client.run_until_disconnected()
+            for channel in SOURCE_CHANNELS:
+                print(f"   • {channel}")
+
+            print("🟢 Listener is running...")
+
+            await client.run_until_disconnected()
+
+            print(
+                "⚠️ Telegram disconnected. "
+                "Reconnecting in 5 seconds..."
+            )
+
+        except Exception as e:
+
+            print(
+                f"❌ Runtime error: "
+                f"{type(e).__name__}: {e}"
+            )
+
+            print(
+                "🔄 Retrying in 10 seconds..."
+            )
+
+        await asyncio.sleep(10)
 
 
 # =========================
