@@ -8,12 +8,9 @@ from bs4 import BeautifulSoup
 from urllib.parse import quote_plus
 
 from telethon import TelegramClient, events
+from telethon.sessions import StringSession
 from dotenv import load_dotenv
 
-
-# =========================================================
-# CONFIG
-# =========================================================
 
 load_dotenv()
 
@@ -30,19 +27,13 @@ SOURCE_CHANNELS = [
     if x.strip()
 ]
 
-PRIVATE_CHANNEL_NAMES = [
-    "Offerzone 2.0"
-]
+PRIVATE_CHANNEL_NAMES = ["Offerzone 2.0"]
 
 STATE_FILE = "deal_state.json"
 
 
-# =========================================================
-# TELEGRAM
-# =========================================================
-
 client = TelegramClient(
-    SESSION,
+    StringSession(SESSION),
     API_ID,
     API_HASH
 )
@@ -50,10 +41,6 @@ client = TelegramClient(
 MONITORED_CHAT_IDS = set()
 MONITORED_SOURCE_NAMES = {}
 
-
-# =========================================================
-# STATE
-# =========================================================
 
 def load_state():
     try:
@@ -79,151 +66,51 @@ def save_state():
         print("State save error:", e)
 
 
-# =========================================================
-# PRODUCT FILTERS
-# =========================================================
-
 ACCESSORY_TERMS = [
-    "cover",
-    "case",
-    "cable",
-    "charger",
-    "adapter",
-    "screen protector",
-    "tempered glass",
-    "back glass",
-    "screen guard",
-    "screen film",
-    "skin",
-    "sleeve",
-    "holder",
-    "mount",
-    "lens protector",
-    "camera protector",
-    "replacement",
-    "battery replacement",
-    "display replacement",
-    "screen replacement",
-    "lcd",
-    "strap",
-    "earphone",
-    "earphones",
-    "airpods",
-    "galaxy buds",
-    "watch",
-    "smartwatch"
+    "cover", "case", "cable", "charger", "adapter",
+    "screen protector", "tempered glass", "back glass",
+    "screen guard", "screen film", "skin", "sleeve",
+    "holder", "mount", "lens protector", "camera protector",
+    "replacement", "battery replacement", "display replacement",
+    "screen replacement", "lcd", "strap", "earphone",
+    "earphones", "airpods", "galaxy buds", "watch", "smartwatch"
 ]
 
 FURNITURE_TERMS = [
-    "sofa",
-    "couch",
-    "recliner",
-    "sectional",
-    "sofa set",
-    "bed",
-    "king bed",
-    "queen bed",
-    "double bed",
-    "single bed",
-    "bunk bed",
-    "wardrobe",
-    "almirah",
-    "dining table",
-    "dining chair",
-    "dining set",
-    "coffee table",
-    "side table",
-    "study table",
-    "office table",
-    "desk",
-    "office chair",
-    "study chair",
-    "reclining chair",
-    "bookshelf",
-    "book shelf",
-    "shoe rack",
-    "shoe cabinet",
-    "tv unit",
-    "tv cabinet",
-    "tv stand",
-    "dresser",
-    "cabinet",
-    "drawer",
-    "chest of drawers",
-    "storage cabinet",
-    "furniture"
+    "sofa", "couch", "recliner", "sectional", "sofa set",
+    "bed", "king bed", "queen bed", "double bed",
+    "single bed", "bunk bed", "wardrobe", "almirah",
+    "dining table", "dining chair", "dining set",
+    "coffee table", "side table", "study table",
+    "office table", "desk", "office chair", "study chair",
+    "reclining chair", "bookshelf", "book shelf",
+    "shoe rack", "shoe cabinet", "tv unit", "tv cabinet",
+    "tv stand", "dresser", "cabinet", "drawer",
+    "chest of drawers", "storage cabinet", "furniture"
 ]
 
 FURNITURE_REJECT_TERMS = [
-    "ankle supporter",
-    "ankle support",
-    "knee supporter",
-    "knee support",
-    "wrist support",
-    "back support",
-    "elbow support",
-    "neck support",
-    "lumbar support",
-    "brace",
-    "orthopedic",
-    "compression",
-    "mattress",
-    "bedsheet",
-    "bed sheet",
-    "pillow",
-    "cushion",
-    "curtain",
-    "cleaner",
-    "cleaning",
-    "polish",
-    "hinge",
-    "handle",
-    "knob",
-    "screw",
-    "bracket",
-    "lamp",
-    "light",
-    "decor",
-    "wall art",
-    "clock",
-    "carpet",
-    "rug",
-    "mat",
-    "laptop stand",
-    "mobile stand",
-    "phone stand",
-    "tablet stand",
-    "monitor stand"
+    "ankle supporter", "ankle support", "knee supporter",
+    "knee support", "wrist support", "back support",
+    "elbow support", "neck support", "lumbar support",
+    "brace", "orthopedic", "compression", "mattress",
+    "bedsheet", "bed sheet", "pillow", "cushion", "curtain",
+    "cleaner", "cleaning", "polish", "hinge", "handle",
+    "knob", "screw", "bracket", "lamp", "light", "decor",
+    "wall art", "clock", "carpet", "rug", "mat",
+    "laptop stand", "mobile stand", "phone stand",
+    "tablet stand", "monitor stand"
 ]
 
 LOOT_TERMS = [
-    "price error",
-    "pricing error",
-    "price glitch",
-    "pricing glitch",
-    "glitch deal",
-    "glitch price",
-    "error price",
-    "error pricing",
-    "loot deal",
-    "loot",
-    "crazy price",
-    "crazy deal",
-    "mistakenly priced",
-    "wrong price",
-    "lowest ever",
-    "all time low",
-    "all-time low",
-    "atl",
-    "historical low",
-    "historic low",
-    "new low"
+    "price error", "pricing error", "price glitch",
+    "pricing glitch", "glitch deal", "glitch price",
+    "error price", "error pricing", "loot deal", "loot",
+    "crazy price", "crazy deal", "mistakenly priced",
+    "wrong price", "lowest ever", "all time low",
+    "all-time low", "atl", "historical low",
+    "historic low", "new low"
 ]
-
-
-# =========================================================
-# URL
-# =========================================================
 
 URL_REGEX = re.compile(
     r"https?://[^\s<>\]\)]+",
@@ -235,11 +122,9 @@ def extract_urls(text):
     if not text:
         return []
 
-    urls = URL_REGEX.findall(text)
-
     result = []
 
-    for url in urls:
+    for url in URL_REGEX.findall(text):
         url = url.rstrip(".,;:!?)]}")
 
         if url not in result:
@@ -247,10 +132,6 @@ def extract_urls(text):
 
     return result
 
-
-# =========================================================
-# PRICE
-# =========================================================
 
 def extract_prices(text):
     if not text:
@@ -264,13 +145,11 @@ def extract_prices(text):
     ]
 
     for pattern in patterns:
-        matches = re.findall(
+        for value in re.findall(
             pattern,
             text,
             re.IGNORECASE
-        )
-
-        for value in matches:
+        ):
             try:
                 prices.append(
                     float(value.replace(",", ""))
@@ -283,16 +162,8 @@ def extract_prices(text):
 
 def get_price(text):
     prices = extract_prices(text)
+    return min(prices) if prices else None
 
-    if not prices:
-        return None
-
-    return min(prices)
-
-
-# =========================================================
-# PRODUCT DETECTION
-# =========================================================
 
 def contains_accessory(text):
     return any(
@@ -307,14 +178,11 @@ def is_iphone(text):
     if contains_accessory(text):
         return False
 
-    patterns = [
-        r"\biphone\s*(11|12|13|14|15|16|17)\b",
-        r"\biphone\s*(11|12|13|14|15|16|17)\s*(pro|max|plus|pro max)?\b"
-    ]
-
-    return any(
-        re.search(pattern, text)
-        for pattern in patterns
+    return bool(
+        re.search(
+            r"\biphone\s*(11|12|13|14|15|16|17)\b",
+            text
+        )
     )
 
 
@@ -339,9 +207,11 @@ def is_samsung_ultra(text):
 def is_furniture(text):
     text = text.lower()
 
-    for term in FURNITURE_REJECT_TERMS:
-        if term in text:
-            return False
+    if any(
+        term in text
+        for term in FURNITURE_REJECT_TERMS
+    ):
+        return False
 
     return any(
         term in text
@@ -371,10 +241,6 @@ def is_loot_message(text):
     )
 
 
-# =========================================================
-# PRICEHISTORY
-# =========================================================
-
 def parse_money(value):
     if value is None:
         return None
@@ -402,26 +268,22 @@ def check_pricehistory(product_url):
             + quote_plus(product_url)
         )
 
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 "
-                "(Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 "
-                "(KHTML, like Gecko) "
-                "Chrome/140.0 Safari/537.36"
-            )
-        }
-
         response = requests.get(
             search_url,
-            headers=headers,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 "
+                    "(Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) "
+                    "Chrome/140.0 Safari/537.36"
+                )
+            },
             timeout=15
         )
 
         if response.status_code != 200:
-            return {
-                "status": "unknown"
-            }
+            return {"status": "unknown"}
 
         soup = BeautifulSoup(
             response.text,
@@ -432,9 +294,6 @@ def check_pricehistory(product_url):
             " ",
             strip=True
         )
-
-        lowest = None
-        current = None
 
         lowest_match = re.search(
             r"Lowest(?:\s*Price)?\s*[:₹RsINR]*\s*([0-9][0-9,]*)",
@@ -448,20 +307,20 @@ def check_pricehistory(product_url):
             re.IGNORECASE
         )
 
-        if lowest_match:
-            lowest = parse_money(
-                lowest_match.group(1)
-            )
+        lowest = (
+            parse_money(lowest_match.group(1))
+            if lowest_match
+            else None
+        )
 
-        if current_match:
-            current = parse_money(
-                current_match.group(1)
-            )
+        current = (
+            parse_money(current_match.group(1))
+            if current_match
+            else None
+        )
 
         if lowest is None:
-            return {
-                "status": "unknown"
-            }
+            return {"status": "unknown"}
 
         return {
             "status": "ok",
@@ -470,19 +329,9 @@ def check_pricehistory(product_url):
         }
 
     except Exception as e:
-        print(
-            "PriceHistory error:",
-            e
-        )
+        print("PriceHistory error:", e)
+        return {"status": "unknown"}
 
-        return {
-            "status": "unknown"
-        }
-
-
-# =========================================================
-# PRICE VALIDATION
-# =========================================================
 
 def validate_price(telegram_price, history):
     if telegram_price is None:
@@ -505,23 +354,10 @@ def validate_price(telegram_price, history):
     return "reject"
 
 
-# =========================================================
-# DUPLICATE CONTROL
-# =========================================================
-
 def normalize_url(url):
     url = url.lower().strip()
-
-    url = url.replace(
-        "https://",
-        ""
-    )
-
-    url = url.replace(
-        "http://",
-        ""
-    )
-
+    url = url.replace("https://", "")
+    url = url.replace("http://", "")
     url = url.split("?")[0]
 
     return url.rstrip("/")
@@ -529,7 +365,6 @@ def normalize_url(url):
 
 def already_seen(url, price):
     key = normalize_url(url)
-
     old = STATE.get(key)
 
     if not old:
@@ -546,13 +381,8 @@ def already_seen(url, price):
     return float(price) >= float(old_price)
 
 
-def remember_deal(
-    url,
-    price,
-    product_type
-):
+def remember_deal(url, price, product_type):
     key = normalize_url(url)
-
     old = STATE.get(key)
 
     if old:
@@ -578,17 +408,11 @@ def remember_deal(
     save_state()
 
 
-# =========================================================
-# SOURCE RESOLUTION
-# =========================================================
-
 async def resolve_sources():
     MONITORED_CHAT_IDS.clear()
     MONITORED_SOURCE_NAMES.clear()
 
-    print()
     print("Resolving Telegram sources...")
-    print()
 
     try:
         dialogs = await client.get_dialogs()
@@ -604,22 +428,13 @@ async def resolve_sources():
         )
         dialogs = []
 
-    # -----------------------------------------------------
-    # PUBLIC CHANNELS
-    # -----------------------------------------------------
-
     for source in SOURCE_CHANNELS:
-
         try:
-            entity = await client.get_entity(
-                source
-            )
+            entity = await client.get_entity(source)
 
             chat_id = int(entity.id)
 
-            MONITORED_CHAT_IDS.add(
-                chat_id
-            )
+            MONITORED_CHAT_IDS.add(chat_id)
 
             username = getattr(
                 entity,
@@ -648,21 +463,14 @@ async def resolve_sources():
             )
 
         except Exception as e:
-
             print(
                 f"NOT FOUND: {source} | {e}"
             )
 
-    # -----------------------------------------------------
-    # PRIVATE CHANNEL
-    # -----------------------------------------------------
-
     for wanted_name in PRIVATE_CHANNEL_NAMES:
-
         found = False
 
         for dialog in dialogs:
-
             title = (
                 getattr(
                     dialog,
@@ -672,14 +480,10 @@ async def resolve_sources():
             ).strip()
 
             if title.lower() == wanted_name.lower():
-
                 entity = dialog.entity
-
                 chat_id = int(entity.id)
 
-                MONITORED_CHAT_IDS.add(
-                    chat_id
-                )
+                MONITORED_CHAT_IDS.add(chat_id)
 
                 MONITORED_SOURCE_NAMES[
                     chat_id
@@ -694,40 +498,18 @@ async def resolve_sources():
                 break
 
         if not found:
-
             print(
                 f"PRIVATE SOURCE NOT FOUND: "
                 f"{wanted_name}"
             )
-
-    print()
-    print("==============================")
-    print("MONITORED SOURCES")
-    print("==============================")
-
-    for chat_id in MONITORED_CHAT_IDS:
-
-        print(
-            f"OK: "
-            f"{MONITORED_SOURCE_NAMES.get(chat_id)} "
-            f"| ID={chat_id}"
-        )
 
     print(
         f"Total sources: "
         f"{len(MONITORED_CHAT_IDS)}"
     )
 
-    print("==============================")
-    print()
-
-
-# =========================================================
-# MESSAGE PROCESSOR
-# =========================================================
 
 async def process_message(event):
-
     chat_id = event.chat_id
 
     if chat_id not in MONITORED_CHAT_IDS:
@@ -738,92 +520,56 @@ async def process_message(event):
     if not text.strip():
         return
 
-    source_name = (
-        MONITORED_SOURCE_NAMES.get(
-            chat_id,
-            str(chat_id)
-        )
+    source_name = MONITORED_SOURCE_NAMES.get(
+        chat_id,
+        str(chat_id)
     )
 
     print()
     print("MESSAGE RECEIVED")
+    print(f"Source: {source_name}")
+    print(f"Message ID: {event.id}")
     print(
-        f"Source: {source_name}"
-    )
-    print(
-        f"Message ID: {event.id}"
+        f"Text: {text.replace(chr(10), ' ')[:300]}"
     )
 
-    preview = text.replace(
-        "\n",
-        " "
-    )
-
-    print(
-        f"Text: {preview[:300]}"
-    )
-
-    product_type = get_product_type(
-        text
-    )
-
-    loot_message = is_loot_message(
-        text
-    )
-
+    product_type = get_product_type(text)
+    loot_message = is_loot_message(text)
     urls = extract_urls(text)
 
     if not product_type and not loot_message:
-        print(
-            "Ignored: no product/loot signal"
-        )
+        print("Ignored: no product/loot signal")
         return
 
     if not urls:
-        print(
-            "Candidate found but no URL"
-        )
+        print("Candidate found but no URL")
         return
 
     telegram_price = get_price(text)
 
     for url in urls:
+        print(f"Checking: {url}")
 
-        print(
-            f"Checking: {url}"
-        )
-
-        history = check_pricehistory(
-            url
-        )
+        history = check_pricehistory(url)
 
         validation = validate_price(
             telegram_price,
             history
         )
 
-        # -------------------------------------------------
-        # ONLY reject when PriceHistory proves it is
-        # substantially above historical low.
-        # -------------------------------------------------
-
         if validation == "reject":
-
             print(
                 "Rejected: above historical low"
             )
-
             continue
 
         if already_seen(
             url,
             telegram_price
         ):
-
             print(
                 "Ignored: duplicate/same price"
             )
-
             continue
 
         remember_deal(
@@ -832,39 +578,23 @@ async def process_message(event):
             product_type
         )
 
-        if product_type:
-            title = product_type
-        else:
-            title = "Loot Deal"
+        title = product_type or "Loot Deal"
 
-        if telegram_price is not None:
-
-            price_text = (
-                f"₹{telegram_price:,.0f}"
-            )
-
-        else:
-
-            price_text = "Not detected"
+        price_text = (
+            f"₹{telegram_price:,.0f}"
+            if telegram_price is not None
+            else "Not detected"
+        )
 
         if history.get("status") == "ok":
+            lowest = history.get("lowest")
 
-            lowest = history.get(
-                "lowest"
+            history_text = (
+                f"₹{lowest:,.0f}"
+                if lowest is not None
+                else "Unknown"
             )
-
-            if lowest is not None:
-
-                history_text = (
-                    f"₹{lowest:,.0f}"
-                )
-
-            else:
-
-                history_text = "Unknown"
-
         else:
-
             history_text = "Unavailable"
 
         alert = (
@@ -882,7 +612,6 @@ async def process_message(event):
         print()
 
         try:
-
             await client.send_message(
                 "me",
                 alert,
@@ -894,79 +623,52 @@ async def process_message(event):
             )
 
         except Exception as e:
-
             print(
                 "Alert send error:",
                 e
             )
 
 
-# =========================================================
-# NEW MESSAGE
-# =========================================================
-
 @client.on(events.NewMessage)
 async def new_message_handler(event):
-
     try:
-
         if event.chat_id not in MONITORED_CHAT_IDS:
             return
 
         await process_message(event)
 
     except Exception as e:
-
         print(
             "NewMessage error:",
             e
         )
 
 
-# =========================================================
-# EDITED MESSAGE
-# =========================================================
-
 @client.on(events.MessageEdited)
 async def edited_message_handler(event):
-
     try:
-
         if event.chat_id not in MONITORED_CHAT_IDS:
             return
 
-        print(
-            "MESSAGE EDITED"
-        )
+        print("MESSAGE EDITED")
 
         await process_message(event)
 
     except Exception as e:
-
         print(
             "MessageEdited error:",
             e
         )
 
 
-# =========================================================
-# MAIN
-# =========================================================
-
 async def main():
-
-    print(
-        "Starting Loot Hunter..."
-    )
+    print("Starting Loot Hunter...")
 
     await client.start()
 
     me = await client.get_me()
 
-    print(
-        "Telegram connected"
-    )
-
+    print("Telegram connected")
     print(
         f"Logged in as: "
         f"{getattr(me, 'first_name', '')}"
@@ -975,11 +677,9 @@ async def main():
     await resolve_sources()
 
     if not MONITORED_CHAT_IDS:
-
         print(
             "ERROR: No monitored sources found."
         )
-
         return
 
     print(
@@ -993,26 +693,14 @@ async def main():
     await client.run_until_disconnected()
 
 
-# =========================================================
-# START
-# =========================================================
-
 if __name__ == "__main__":
-
     try:
-
-        asyncio.run(
-            main()
-        )
+        asyncio.run(main())
 
     except KeyboardInterrupt:
-
-        print(
-            "Loot Hunter stopped."
-        )
+        print("Loot Hunter stopped.")
 
     except Exception as e:
-
         print(
             "Fatal error:",
             e
