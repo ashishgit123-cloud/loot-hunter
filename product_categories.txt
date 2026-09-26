@@ -1,0 +1,181 @@
+DEAL BOT PRODUCT CATEGORY MASTER LIST
+Version: 1.0
+
+Purpose:
+Source-of-truth category list for the deal bot.
+The validator should read this file instead of hardcoding product categories.
+
+1. ELECTRONICS
+- Mobile / Smartphone
+- Laptop / MacBook
+- Tablet / iPad
+- TV / Smart TV
+- Monitor
+- Headphones / Earphones / TWS
+- Speakers / Soundbar
+- Camera / Lens
+- Gaming Console
+- Gaming Accessories
+- Keyboard / Mouse
+- Printer / Scanner
+- Router / Wi-Fi Devices
+- SSD / HDD / Storage
+- Power Bank
+- Smart Home Devices
+- Projector
+- AC
+- Refrigerator
+- Washing Machine
+- Microwave / OTG
+- Air Purifier
+- Vacuum Cleaner
+- Kitchen Appliances
+- Personal Grooming Appliances
+- Computer Components
+- RAM / GPU / CPU / Motherboard
+
+2. FURNITURE
+- Sofa
+- Bed
+- Mattress
+- Office Chair
+- Gaming Chair
+- Study Table
+- Office Table
+- Dining Table
+- Dining Chair
+- Wardrobe
+- Cabinet
+- Bookshelf
+- TV Unit
+- Shoe Rack
+- Recliner
+- Coffee Table
+- Side Table
+- Storage Furniture
+
+3. SPORTS & FITNESS
+- Running Shoes
+- Sports Shoes
+- Football
+- Cricket Bat
+- Cricket Equipment
+- Badminton Racket
+- Badminton Equipment
+- Tennis Equipment
+- Basketball
+- Sports Bags
+- Gym Equipment
+- Dumbbells
+- Barbell / Weight Plates
+- Treadmill
+- Exercise Bike
+- Yoga Equipment
+- Fitness Equipment
+- Cycling
+- Sports Accessories
+
+4. HOME & KITCHEN
+- Cookware
+- Kitchen Appliances
+- Kitchen Storage
+- Home Utility
+- Cleaning Equipment
+- Home Organization
+- Dining & Serving
+- Bathroom Utility
+- Home Improvement
+
+5. AUTOMOTIVE
+- Car Accessories
+- Bike Accessories
+- Tyres
+- Dashcam
+- Car Care Equipment
+- Bike Care Equipment
+- Automotive Tools
+- Car / Bike Electronics
+
+6. TOOLS & HARDWARE
+- Power Tools
+- Drill
+- Grinder
+- Screwdriver Sets
+- Tool Kits
+- Measuring Tools
+- Hand Tools
+- Hardware Equipment
+- Workshop Equipment
+
+7. OUTDOOR & CAMPING
+- Tents
+- Camping Gear
+- Trekking Equipment
+- Hiking Equipment
+- Outdoor Furniture
+- Outdoor Utility
+
+8. TRAVEL & LUGGAGE
+- Trolley Bags
+- Suitcases
+- Travel Bags
+- Backpacks
+- Duffle Bags
+- Travel Accessories
+- Travel Gear
+
+9. TOYS & KIDS
+- Premium Toys
+- Building Sets
+- LEGO-type Sets
+- Kids Ride-ons
+- Educational Toys
+- Kids Equipment
+
+10. PET SUPPLIES
+- Pet Beds
+- Pet Feeders
+- Pet Grooming Equipment
+- Pet Travel Equipment
+- Pet Accessories
+
+11. GARDEN & OUTDOOR HOME
+- Gardening Tools
+- Garden Equipment
+- Planters
+- Outdoor Storage
+- Outdoor Utility
+
+12. BOOKS & EDUCATION
+- Books
+- Educational Equipment
+- Study Equipment
+- Educational Devices
+
+13. BEAUTY & PERSONAL CARE
+- Trimmers
+- Grooming Devices
+- Hair Dryers
+- Hair Styling Appliances
+- Electric Personal Care Devices
+
+14. INDUSTRIAL / PROFESSIONAL EQUIPMENT
+- Professional Tools
+- Industrial Equipment
+- Commercial Equipment
+- Measuring / Testing Equipment
+
+EXCLUDE / DO NOT TARGET
+- Clothes / Fashion
+- Jewellery / Jewelry
+- Phone Covers / Cases
+- Tempered Glass / Screen Protectors
+- Cables
+- Small Random Accessories
+- Small Watches / Smart Bands
+- Cosmetic Consumables
+- Grocery / Daily Consumables
+- Low-value Random Items
+
+MINIMUM DEAL PRICE
+- Product price must be strictly greater than ₹1,000.
