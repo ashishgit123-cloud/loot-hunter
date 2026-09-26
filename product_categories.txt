@@ -1,181 +1,289 @@
 DEAL BOT PRODUCT CATEGORY MASTER LIST
-Version: 1.0
+Version: 1.1
 
 Purpose:
 Source-of-truth category list for the deal bot.
-The validator should read this file instead of hardcoding product categories.
+No brand names or specific product models should be hardcoded.
 
-1. ELECTRONICS
-- Mobile / Smartphone
-- Laptop / MacBook
-- Tablet / iPad
-- TV / Smart TV
-- Monitor
-- Headphones / Earphones / TWS
-- Speakers / Soundbar
-- Camera / Lens
-- Gaming Console
-- Gaming Accessories
-- Keyboard / Mouse
-- Printer / Scanner
-- Router / Wi-Fi Devices
-- SSD / HDD / Storage
-- Power Bank
-- Smart Home Devices
-- Projector
-- AC
-- Refrigerator
-- Washing Machine
-- Microwave / OTG
-- Air Purifier
-- Vacuum Cleaner
+==================================================
+1. ELECTRONICS & COMPUTING
+==================================================
+
+- Smartphones / Mobile Phones
+- Laptops / MacBooks
+- Tablets / iPads
+- Desktop Computers
+- Monitors
+- TVs / Smart TVs
+- Projectors
+- Cameras
+- Camera Lenses
+- Gaming Consoles
+- Graphics Cards / GPU
+- Processors / CPU
+- Motherboards
+- RAM
+- SSD
+- HDD
+- NAS / Storage Devices
+- Printers / Scanners
+- Routers / Wi-Fi Devices
+- Networking Equipment
+- Keyboards
+- Mice
+- Webcams
+- Computer Accessories
+
+==================================================
+2. AUDIO
+==================================================
+
+- Headphones
+- Earphones
+- TWS Earbuds
+- Bluetooth Speakers
+- Home Audio Systems
+- Soundbars
+- Amplifiers
+- Microphones
+- Audio Equipment
+
+==================================================
+3. HOME APPLIANCES
+==================================================
+
+- Air Conditioners
+- Refrigerators
+- Washing Machines
+- Dishwashers
+- Microwave Ovens
+- OTG Ovens
+- Air Purifiers
+- Vacuum Cleaners
+- Water Purifiers
+- Fans
+- Room Heaters
 - Kitchen Appliances
-- Personal Grooming Appliances
-- Computer Components
-- RAM / GPU / CPU / Motherboard
+- Coffee Machines
+- Electric Kettles
+- Induction Cooktops
 
-2. FURNITURE
-- Sofa
-- Bed
-- Mattress
-- Office Chair
-- Gaming Chair
-- Study Table
-- Office Table
-- Dining Table
-- Dining Chair
-- Wardrobe
-- Cabinet
-- Bookshelf
-- TV Unit
-- Shoe Rack
-- Recliner
-- Coffee Table
-- Side Table
+==================================================
+4. SMART HOME
+==================================================
+
+- Smart Home Devices
+- Smart Lighting
+- Smart Switches
+- Smart Plugs
+- Security Cameras
+- Smart Doorbells
+- Home Automation Devices
+
+==================================================
+5. FURNITURE
+==================================================
+
+- Sofas
+- Beds
+- Mattresses
+- Office Chairs
+- Gaming Chairs
+- Recliners
+- Study Tables
+- Office Tables
+- Dining Tables
+- Dining Chairs
+- Wardrobes
+- Cabinets
+- Bookshelves
+- TV Units
+- Shoe Racks
+- Coffee Tables
+- Side Tables
 - Storage Furniture
 
-3. SPORTS & FITNESS
+==================================================
+6. SPORTS & FITNESS
+==================================================
+
 - Running Shoes
 - Sports Shoes
-- Football
-- Cricket Bat
+- Football Shoes
+- Cricket Bats
 - Cricket Equipment
-- Badminton Racket
+- Badminton Rackets
 - Badminton Equipment
 - Tennis Equipment
-- Basketball
+- Basketball Equipment
 - Sports Bags
 - Gym Equipment
 - Dumbbells
-- Barbell / Weight Plates
-- Treadmill
-- Exercise Bike
+- Barbells / Weight Plates
+- Treadmills
+- Exercise Bikes
+- Cross Trainers
 - Yoga Equipment
 - Fitness Equipment
-- Cycling
+- Cycling Equipment
 - Sports Accessories
 
-4. HOME & KITCHEN
-- Cookware
-- Kitchen Appliances
-- Kitchen Storage
-- Home Utility
-- Cleaning Equipment
-- Home Organization
-- Dining & Serving
-- Bathroom Utility
-- Home Improvement
+==================================================
+7. AUTOMOTIVE
+==================================================
 
-5. AUTOMOTIVE
 - Car Accessories
 - Bike Accessories
+- Car Electronics
+- Bike Electronics
+- Dashcams
+- Car Audio
 - Tyres
-- Dashcam
 - Car Care Equipment
 - Bike Care Equipment
 - Automotive Tools
-- Car / Bike Electronics
+- Automotive Equipment
 
-6. TOOLS & HARDWARE
+==================================================
+8. TOOLS & HARDWARE
+==================================================
+
 - Power Tools
-- Drill
-- Grinder
+- Drills
+- Grinders
 - Screwdriver Sets
 - Tool Kits
-- Measuring Tools
 - Hand Tools
-- Hardware Equipment
+- Measuring Tools
 - Workshop Equipment
+- Hardware Equipment
+- Welding Equipment
+- Professional Tools
 
-7. OUTDOOR & CAMPING
+==================================================
+9. TRAVEL & LUGGAGE
+==================================================
+
+- Trolley Bags
+- Suitcases
+- Backpacks
+- Duffle Bags
+- Travel Bags
+- Travel Gear
+- Travel Accessories
+
+==================================================
+10. OUTDOOR & CAMPING
+==================================================
+
 - Tents
 - Camping Gear
 - Trekking Equipment
 - Hiking Equipment
 - Outdoor Furniture
+- Outdoor Equipment
 - Outdoor Utility
 
-8. TRAVEL & LUGGAGE
-- Trolley Bags
-- Suitcases
-- Travel Bags
-- Backpacks
-- Duffle Bags
-- Travel Accessories
-- Travel Gear
+==================================================
+11. HOME & ORGANIZATION
+==================================================
 
-9. TOYS & KIDS
+- Home Utility
+- Home Organization
+- Storage Solutions
+- Cleaning Equipment
+- Kitchen Storage
+- Bathroom Utility
+- Dining & Serving
+- Home Improvement Equipment
+
+==================================================
+12. TOYS & KIDS
+==================================================
+
 - Premium Toys
 - Building Sets
-- LEGO-type Sets
-- Kids Ride-ons
+- Construction Sets
 - Educational Toys
+- Kids Ride-ons
 - Kids Equipment
+- Learning Devices
 
-10. PET SUPPLIES
+==================================================
+13. PET SUPPLIES
+==================================================
+
 - Pet Beds
 - Pet Feeders
 - Pet Grooming Equipment
 - Pet Travel Equipment
 - Pet Accessories
 
-11. GARDEN & OUTDOOR HOME
+==================================================
+14. GARDEN & OUTDOOR HOME
+==================================================
+
 - Gardening Tools
 - Garden Equipment
 - Planters
 - Outdoor Storage
 - Outdoor Utility
 
-12. BOOKS & EDUCATION
+==================================================
+15. BOOKS & EDUCATION
+==================================================
+
 - Books
 - Educational Equipment
 - Study Equipment
 - Educational Devices
 
-13. BEAUTY & PERSONAL CARE
+==================================================
+16. BEAUTY & PERSONAL CARE DEVICES
+==================================================
+
 - Trimmers
-- Grooming Devices
+- Shavers
 - Hair Dryers
+- Hair Straighteners
 - Hair Styling Appliances
+- Electric Grooming Devices
 - Electric Personal Care Devices
 
-14. INDUSTRIAL / PROFESSIONAL EQUIPMENT
-- Professional Tools
+==================================================
+17. PROFESSIONAL / INDUSTRIAL
+==================================================
+
+- Professional Equipment
 - Industrial Equipment
 - Commercial Equipment
-- Measuring / Testing Equipment
+- Measuring Equipment
+- Testing Equipment
+- Professional Tools
 
+==================================================
 EXCLUDE / DO NOT TARGET
+==================================================
+
 - Clothes / Fashion
 - Jewellery / Jewelry
 - Phone Covers / Cases
-- Tempered Glass / Screen Protectors
+- Screen Protectors
+- Tempered Glass
 - Cables
+- Chargers
+- Adapters
 - Small Random Accessories
-- Small Watches / Smart Bands
+- Small Watches
+- Smart Bands
 - Cosmetic Consumables
-- Grocery / Daily Consumables
+- Grocery
+- Food
+- Daily Consumables
 - Low-value Random Items
 
+==================================================
 MINIMUM DEAL PRICE
+==================================================
+
 - Product price must be strictly greater than ₹1,000.
