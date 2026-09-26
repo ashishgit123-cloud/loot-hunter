@@ -1,1124 +1,1059 @@
+# loot_listener.py
+# VERSION: 2.7
+#
+# Features:
+# - Telegram broadcast channel auto-discovery
+# - New message monitoring
+# - Edited message monitoring
+# - 60 sec channel refresh
+# - 60 sec heartbeat
+# - Web deal scanning
+# - Duplicate URL protection
+# - Deal validation through deal_validator.py
+# - Accepted deals -> lootersAmer
+# - Reject/error logs -> LOG_CHANNEL
+# - Persistent processed URL state
+
+import os
 import re
-import requests
-from bs4 import BeautifulSoup
-from urllib.parse import quote_plus, urlparse
+import json
+import asyncio
+import traceback
+from datetime import datetime
+
+from dotenv import load_dotenv
+from telethon import TelegramClient, events
+from telethon.sessions import StringSession
+
+from deal_validator import validate_deal
+from deal_sources import get_all_web_deals
 
 
 # ============================================================
-# CONFIG
+# VERSION
 # ============================================================
 
-REQUEST_TIMEOUT = 15
-
-# Product categories we want
-ALLOWED_CATEGORIES = [
-    "electronics",
-    "mobile",
-    "smartphone",
-    "laptop",
-    "tablet",
-    "monitor",
-    "tv",
-    "television",
-    "headphone",
-    "earphone",
-    "earbuds",
-    "speaker",
-    "camera",
-    "printer",
-    "router",
-    "ssd",
-    "hard disk",
-    "keyboard",
-    "mouse",
-    "gaming",
-    "furniture",
-    "chair",
-    "office chair",
-    "sofa",
-    "bed",
-    "mattress",
-    "table",
-    "desk",
-    "cabinet",
-    "sports",
-    "running shoe",
-    "running shoes",
-    "sports shoe",
-    "sports shoes",
-    "sneaker",
-    "sneakers",
-    "football",
-    "cricket",
-    "badminton",
-    "fitness",
-    "gym",
-    "treadmill",
-]
-
-# Things we do NOT want
-EXCLUDED_KEYWORDS = [
-    "phone cover",
-    "mobile cover",
-    "back cover",
-    "case for",
-    "flip cover",
-    "silicon cover",
-    "silicone cover",
-    "tempered glass",
-    "screen protector",
-    "screen guard",
-    "charging cable",
-    "data cable",
-    "usb cable",
-    "type c cable",
-    "lightning cable",
-    "aux cable",
-    "watch strap",
-    "watch band",
-    "smart band",
-    "fitness band",
-    "bangle",
-    "bracelet",
-    "jewellery",
-    "jewelry",
-    "earring",
-    "necklace",
-    "ring",
-    "socks",
-    "innerwear",
-    "underwear",
-    "t-shirt",
-    "shirt",
-    "kurta",
-    "jeans",
-    "trouser",
-    "trousers",
-    "dress",
-    "saree",
-    "sandal",
-    "slipper",
-    "belt",
-    "wallet",
-    "small accessory",
-    "replacement part",
-    "spare part",
-]
+VERSION = "2.7"
 
 
 # ============================================================
-# HTTP SESSION
+# ENVIRONMENT
 # ============================================================
 
-SESSION = requests.Session()
+load_dotenv()
 
-SESSION.headers.update({
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/140.0 Safari/537.36"
-    ),
-    "Accept-Language": "en-IN,en;q=0.9",
-})
+API_ID = int(os.getenv("TG_API_ID", "0"))
+API_HASH = os.getenv("TG_API_HASH", "")
+TG_SESSION = os.getenv("TG_SESSION", "")
 
+DESTINATION = "lootersAmer"
 
-# ============================================================
-# BASIC HELPERS
-# ============================================================
+LOG_CHANNEL = os.getenv(
+    "LOG_CHANNEL",
+    ""
+)
 
-def clean_text(text):
-    if not text:
-        return ""
+MIN_PRICE = 1000
 
-    text = re.sub(r"\s+", " ", str(text))
-    return text.strip()
+CHANNEL_REFRESH_SECONDS = 60
+HEARTBEAT_SECONDS = 60
+WEB_SCAN_SECONDS = 300
 
-
-def normalize_title(title):
-    title = clean_text(title).lower()
-
-    # Remove common noise
-    title = re.sub(r"\([^)]*\)", " ", title)
-    title = re.sub(r"\[[^\]]*\]", " ", title)
-
-    # Remove special characters
-    title = re.sub(r"[^a-z0-9\s]", " ", title)
-
-    # Common useless words
-    stop_words = {
-        "buy",
-        "best",
-        "deal",
-        "offer",
-        "sale",
-        "discount",
-        "price",
-        "online",
-        "india",
-        "amazon",
-        "flipkart",
-        "new",
-        "latest",
-        "original",
-        "free",
-    }
-
-    words = []
-
-    for word in title.split():
-        if word not in stop_words:
-            words.append(word)
-
-    return " ".join(words)
-
-
-def title_tokens(title):
-    normalized = normalize_title(title)
-
-    if not normalized:
-        return set()
-
-    return set(normalized.split())
-
-
-def title_similarity(title1, title2):
-    """
-    Basic token based similarity.
-    Used only as a safety check so unrelated PriceHistory
-    products are not accepted.
-    """
-
-    a = title_tokens(title1)
-    b = title_tokens(title2)
-
-    if not a or not b:
-        return 0.0
-
-    common = a.intersection(b)
-
-    return len(common) / max(len(a), len(b))
+STATE_FILE = "deal_state.json"
 
 
 # ============================================================
-# PRICE HELPERS
+# BASIC CHECK
 # ============================================================
 
-def parse_price(value):
-    if value is None:
-        return None
+if not API_ID:
+    raise RuntimeError("TG_API_ID is missing")
 
-    if isinstance(value, (int, float)):
-        value = float(value)
+if not API_HASH:
+    raise RuntimeError("TG_API_HASH is missing")
 
-        if value <= 0:
-            return None
+if not TG_SESSION:
+    raise RuntimeError("TG_SESSION is missing")
 
-        return value
 
-    text = str(value)
+# ============================================================
+# TELEGRAM CLIENT
+# ============================================================
 
-    # Remove commas etc.
-    text = text.replace(",", "")
+client = TelegramClient(
+    StringSession(TG_SESSION),
+    API_ID,
+    API_HASH,
+)
 
-    match = re.search(
-        r"(?:₹|Rs\.?|INR)?\s*(\d+(?:\.\d+)?)",
-        text,
-        re.IGNORECASE
-    )
 
-    if not match:
-        return None
+# ============================================================
+# STATE
+# ============================================================
+
+processed_urls = set()
+
+
+def load_state():
+
+    global processed_urls
+
+    if not os.path.exists(STATE_FILE):
+        processed_urls = set()
+        return
 
     try:
-        price = float(match.group(1))
 
-        if price <= 0:
-            return None
+        with open(
+            STATE_FILE,
+            "r",
+            encoding="utf-8",
+        ) as f:
 
-        return price
+            data = json.load(f)
+
+        if isinstance(data, list):
+            processed_urls = set(data)
+
+        elif isinstance(data, dict):
+            processed_urls = set(
+                data.get(
+                    "processed_urls",
+                    [],
+                )
+            )
+
+        else:
+            processed_urls = set()
 
     except Exception:
-        return None
+
+        processed_urls = set()
 
 
-def extract_prices(text):
-    """
-    Extract all prices from text.
-    """
+def save_state():
+
+    try:
+
+        with open(
+            STATE_FILE,
+            "w",
+            encoding="utf-8",
+        ) as f:
+
+            json.dump(
+                list(processed_urls),
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
+
+    except Exception as e:
+
+        print(
+            f"STATE SAVE ERROR: {type(e).__name__}: {e}"
+        )
+
+
+# ============================================================
+# CHANNEL CACHE
+# ============================================================
+
+known_channels = {}
+
+
+# ============================================================
+# URL EXTRACTION
+# ============================================================
+
+URL_PATTERN = re.compile(
+    r"https?://[^\s<>\]\)]+",
+    re.I,
+)
+
+
+def extract_urls(text):
 
     if not text:
         return []
 
-    patterns = [
-        r"₹\s*[\d,]+(?:\.\d+)?",
-        r"\bRs\.?\s*[\d,]+(?:\.\d+)?",
-        r"\bINR\s*[\d,]+(?:\.\d+)?",
-    ]
+    urls = URL_PATTERN.findall(text)
 
-    found = []
+    cleaned = []
 
-    for pattern in patterns:
-        for match in re.findall(pattern, text, re.IGNORECASE):
-            price = parse_price(match)
+    for url in urls:
 
-            if price is not None:
-                found.append(price)
-
-    return found
-
-
-# ============================================================
-# PRODUCT CLASSIFICATION
-# ============================================================
-
-def classify_product(title):
-    if not title:
-        return {
-            "allowed": False,
-            "category": None,
-            "reason": "Product title is empty"
-        }
-
-    text = title.lower()
-
-    # First reject obvious junk/accessories
-    for keyword in EXCLUDED_KEYWORDS:
-
-        if keyword in text:
-            return {
-                "allowed": False,
-                "category": "excluded",
-                "reason": f"Excluded product type: {keyword}"
-            }
-
-    # Then find allowed category
-    for keyword in ALLOWED_CATEGORIES:
-
-        if keyword in text:
-            return {
-                "allowed": True,
-                "category": keyword,
-                "reason": f"Allowed category: {keyword}"
-            }
-
-    return {
-        "allowed": False,
-        "category": None,
-        "reason": "Product category is outside configured deal categories"
-    }
-
-
-# ============================================================
-# URL RESOLUTION
-# ============================================================
-
-def resolve_url(url):
-    """
-    Resolve short URLs such as:
-      fkrt.co/xxxxx
-      amzn.in/xxxxx
-      amzn.to/xxxxx
-
-    Returns:
-      resolved_url, error
-    """
-
-    if not url:
-        return None, "URL is empty"
-
-    url = url.strip()
-
-    if not url.startswith(("http://", "https://")):
-        url = "https://" + url
-
-    try:
-        response = SESSION.get(
-            url,
-            timeout=REQUEST_TIMEOUT,
-            allow_redirects=True,
+        url = url.rstrip(
+            ".,!?;:)]}"
         )
-
-        final_url = response.url
-
-        if not final_url:
-            return None, "URL resolution returned empty URL"
-
-        return final_url, None
-
-    except requests.RequestException as exc:
-        return None, f"URL resolution failed: {exc}"
-
-
-# ============================================================
-# DOMAIN DETECTION
-# ============================================================
-
-def get_domain(url):
-    if not url:
-        return ""
-
-    try:
-        hostname = urlparse(url).hostname or ""
-        return hostname.lower()
-    except Exception:
-        return ""
-
-
-def normalize_domain(domain):
-    domain = domain.lower()
-
-    if domain.startswith("www."):
-        domain = domain[4:]
-
-    return domain
-
-
-# ============================================================
-# PRICEHISTORY SEARCH
-# ============================================================
-
-def build_pricehistory_queries(title):
-    """
-    Creates multiple search queries.
-
-    We intentionally use the actual product title rather than
-    hardcoding Samsung/iPhone/etc.
-    """
-
-    title = clean_text(title)
-
-    queries = []
-
-    if title:
-        queries.append(title)
-
-    normalized = normalize_title(title)
-
-    if normalized and normalized != title.lower():
-        queries.append(normalized)
-
-    # Remove very long titles
-    words = normalized.split()
-
-    if len(words) > 8:
-        queries.append(" ".join(words[:8]))
-
-    return list(dict.fromkeys(queries))
-
-
-def fetch_pricehistory_search(query):
-    """
-    Search PriceHistory website.
-
-    If their search endpoint changes, this function fails safely
-    instead of pretending that a product was found.
-    """
-
-    search_url = (
-        "https://pricehistory.app/search"
-        "?q=" + quote_plus(query)
-    )
-
-    try:
-        response = SESSION.get(
-            search_url,
-            timeout=REQUEST_TIMEOUT,
-        )
-
-        if response.status_code != 200:
-            return []
-
-        return parse_pricehistory_results(
-            response.text,
-            query
-        )
-
-    except requests.RequestException:
-        return []
-
-
-def parse_pricehistory_results(html, query):
-    """
-    Parse possible PriceHistory result cards.
-
-    We deliberately collect candidate information and validate
-    title similarity before accepting anything.
-    """
-
-    soup = BeautifulSoup(html, "html.parser")
-
-    candidates = []
-
-    # Links are the most reliable anchor for a product result.
-    for anchor in soup.find_all("a", href=True):
-
-        href = anchor.get("href", "").strip()
-
-        if not href:
-            continue
-
-        text = clean_text(anchor.get_text(" ", strip=True))
-
-        if not text:
-            continue
-
-        # Look for product-ish text
-        prices = extract_prices(text)
-
-        if not prices:
-            # Try parent card
-            parent = anchor
-
-            for _ in range(4):
-
-                parent = parent.parent
-
-                if not parent:
-                    break
-
-                parent_text = clean_text(
-                    parent.get_text(" ", strip=True)
-                )
-
-                prices = extract_prices(parent_text)
-
-                if prices:
-                    text = parent_text
-                    break
-
-        if not prices:
-            continue
-
-        absolute_url = href
-
-        if href.startswith("/"):
-            absolute_url = "https://pricehistory.app" + href
-        elif href.startswith("//"):
-            absolute_url = "https:" + href
-
-        candidates.append({
-            "title": text,
-            "url": absolute_url,
-            "prices": prices,
-        })
-
-    return candidates
-
-
-# ============================================================
-# PRICEHISTORY PRODUCT PAGE
-# ============================================================
-
-def fetch_pricehistory_product(url):
-    """
-    Open a PriceHistory product page and try to extract
-    historical minimum.
-    """
-
-    if not url:
-        return None
-
-    try:
-        response = SESSION.get(
-            url,
-            timeout=REQUEST_TIMEOUT,
-        )
-
-        if response.status_code != 200:
-            return None
-
-        soup = BeautifulSoup(
-            response.text,
-            "html.parser"
-        )
-
-        page_text = clean_text(
-            soup.get_text(" ", strip=True)
-        )
-
-        # ----------------------------------------------------
-        # Explicit historical-low labels
-        # ----------------------------------------------------
-
-        historical_patterns = [
-            r"all[\s\-]*time\s+low[^₹0-9]{0,50}₹?\s*([\d,]+)",
-            r"lowest\s+price[^₹0-9]{0,50}₹?\s*([\d,]+)",
-            r"lowest\s+ever[^₹0-9]{0,50}₹?\s*([\d,]+)",
-            r"historical\s+low[^₹0-9]{0,50}₹?\s*([\d,]+)",
-            r"lowest[^₹0-9]{0,50}₹?\s*([\d,]+)",
-        ]
-
-        for pattern in historical_patterns:
-
-            match = re.search(
-                pattern,
-                page_text,
-                re.IGNORECASE
-            )
-
-            if match:
-
-                price = parse_price(
-                    match.group(1)
-                )
-
-                if price:
-                    return {
-                        "historical_low": price,
-                        "page_title": clean_text(
-                            soup.title.get_text()
-                            if soup.title
-                            else ""
-                        ),
-                        "source_url": url,
-                    }
-
-        # ----------------------------------------------------
-        # JSON-LD / script fallback
-        # ----------------------------------------------------
-
-        script_text = " ".join(
-            script.get_text(" ", strip=True)
-            for script in soup.find_all("script")
-        )
-
-        patterns = [
-            r'"lowestPrice"\s*:\s*"?(?:₹)?([\d,.]+)',
-            r'"lowest_price"\s*:\s*"?(?:₹)?([\d,.]+)',
-            r'"allTimeLow"\s*:\s*"?(?:₹)?([\d,.]+)',
-            r'"all_time_low"\s*:\s*"?(?:₹)?([\d,.]+)',
-            r'"minPrice"\s*:\s*"?(?:₹)?([\d,.]+)',
-        ]
-
-        for pattern in patterns:
-
-            match = re.search(
-                pattern,
-                script_text,
-                re.IGNORECASE
-            )
-
-            if match:
-
-                price = parse_price(
-                    match.group(1)
-                )
-
-                if price:
-                    return {
-                        "historical_low": price,
-                        "page_title": clean_text(
-                            soup.title.get_text()
-                            if soup.title
-                            else ""
-                        ),
-                        "source_url": url,
-                    }
-
-        return None
-
-    except requests.RequestException:
-        return None
-
-
-# ============================================================
-# PRICEHISTORY LOOKUP
-# ============================================================
-
-def pricehistory_lookup(product_title, merchant_url=None):
-    """
-    Returns the best matching PriceHistory record.
-
-    IMPORTANT:
-    We do not accept the first random search result.
-    Product title similarity is checked.
-    """
-
-    queries = build_pricehistory_queries(
-        product_title
-    )
-
-    all_candidates = []
-
-    for query in queries:
-
-        results = fetch_pricehistory_search(
-            query
-        )
-
-        all_candidates.extend(results)
-
-        if all_candidates:
-            break
-
-    if not all_candidates:
-        return {
-            "found": False,
-            "reason": "No PriceHistory product found"
-        }
-
-    best_candidate = None
-    best_similarity = 0.0
-
-    for candidate in all_candidates:
-
-        candidate_title = candidate.get(
-            "title",
-            ""
-        )
-
-        similarity = title_similarity(
-            product_title,
-            candidate_title
-        )
-
-        if similarity > best_similarity:
-
-            best_similarity = similarity
-            best_candidate = candidate
-
-    # Safety threshold
-    if not best_candidate or best_similarity < 0.35:
-
-        return {
-            "found": False,
-            "reason": (
-                "PriceHistory result found but product "
-                "title did not match sufficiently"
-            ),
-            "similarity": best_similarity,
-        }
-
-    history = fetch_pricehistory_product(
-        best_candidate.get("url")
-    )
-
-    if not history:
-
-        return {
-            "found": False,
-            "reason": (
-                "Matching PriceHistory product found, "
-                "but historical low could not be extracted"
-            ),
-            "matched_title": best_candidate.get(
-                "title",
-                ""
-            ),
-            "similarity": best_similarity,
-        }
-
-    history["found"] = True
-
-    history["matched_title"] = best_candidate.get(
-        "title",
-        ""
-    )
-
-    history["similarity"] = best_similarity
-
-    return history
-
-
-# ============================================================
-# SUSPICIOUS HISTORY CHECK
-# ============================================================
-
-def suspicious_historical_low(
-    product_title,
-    current_price,
-    historical_low
-):
-    """
-    Prevent obviously bad historical records from creating
-    fake loot alerts.
-
-    Example:
-      Samsung S23 current = ₹26,499
-      history = ₹99
-
-    ₹99 is suspicious and should not automatically be treated
-    as a genuine historical low.
-    """
-
-    if not historical_low:
-        return False, ""
-
-    if historical_low <= 0:
-        return True, "Historical low is zero or negative"
-
-    # Extremely low history for normally expensive products
-    high_value_keywords = [
-        "iphone",
-        "samsung galaxy",
-        "pixel",
-        "oneplus",
-        "ipad",
-        "macbook",
-        "laptop",
-        "television",
-        "tv",
-        "monitor",
-        "camera",
-        "washing machine",
-        "refrigerator",
-        "sofa",
-        "bed",
-        "office chair",
-    ]
-
-    title = product_title.lower()
-
-    high_value_product = any(
-        keyword in title
-        for keyword in high_value_keywords
-    )
-
-    if high_value_product:
-
-        if historical_low < 500:
-            return (
-                True,
-                "Historical low looks suspiciously low for this product"
-            )
-
-    # If current price is very high and historical low is
-    # unrealistically tiny, flag it.
-    if current_price >= 5000:
-
-        if historical_low < current_price * 0.03:
-            return (
-                True,
-                "Historical low is below 3% of current price and may be invalid"
-            )
-
-    return False, ""
-
-
-# ============================================================
-# PRICE COMPARISON
-# ============================================================
-
-def compare_price(current_price, historical_low):
-    """
-    IMPORTANT LOGIC
-
-    current <= historical low
-        -> NEW_LOW
-
-    current is within 3% OR ₹50 of historical low
-        -> NEAR_LOW
-
-    otherwise
-        -> NOT_LOW
-    """
-
-    if current_price is None:
-        return {
-            "status": "INVALID_PRICE",
-            "reason": "Current price could not be determined"
-        }
-
-    if historical_low is None:
-        return {
-            "status": "PRICE_HISTORY_NOT_FOUND",
-            "reason": "Historical low is unavailable"
-        }
-
-    # --------------------------------------------------------
-    # EXACT EQUAL ALSO COUNTS AS NEW LOW
-    # --------------------------------------------------------
-
-    if current_price <= historical_low:
-
-        return {
-            "status": "NEW_LOW",
-            "historical_low": historical_low,
-            "reason": (
-                f"Current price ₹{current_price:,.0f} is "
-                f"equal to or below historical low "
-                f"₹{historical_low:,.0f}"
-            ),
-        }
-
-    # --------------------------------------------------------
-    # NEAR LOW
-    # 3% OR ₹50 tolerance
-    # --------------------------------------------------------
-
-    tolerance = max(
-        50,
-        historical_low * 0.03
-    )
-
-    if current_price <= historical_low + tolerance:
-
-        difference = current_price - historical_low
-
-        return {
-            "status": "NEAR_LOW",
-            "historical_low": historical_low,
-            "reason": (
-                f"Current price ₹{current_price:,.0f} is "
-                f"₹{difference:,.0f} above historical low "
-                f"₹{historical_low:,.0f}, within allowed "
-                f"3%/₹50 tolerance"
-            ),
-        }
-
-    # --------------------------------------------------------
-    # NOT LOW
-    # --------------------------------------------------------
-
-    difference = current_price - historical_low
-
-    return {
-        "status": "NOT_LOW",
-        "historical_low": historical_low,
-        "reason": (
-            f"Current price ₹{current_price:,.0f} is "
-            f"₹{difference:,.0f} above historical low "
-            f"₹{historical_low:,.0f}"
-        ),
-    }
-
-
-# ============================================================
-# MAIN VALIDATOR
-# ============================================================
-
-def validate_deal(
-    product_title,
-    deal_price,
-    url=None,
-    source=None,
-):
-    """
-    Main function called by loot_listener.py.
-
-    Returns a structured dictionary:
-
-    {
-        status,
-        historical_low,
-        reason
-    }
-    """
-
-    try:
-
-        # ----------------------------------------------------
-        # INPUT CHECK
-        # ----------------------------------------------------
-
-        product_title = clean_text(
-            product_title
-        )
-
-        deal_price = parse_price(
-            deal_price
-        )
-
-        if not product_title:
-
-            return {
-                "status": "INVALID_PRODUCT",
-                "historical_low": None,
-                "reason": "Product title is empty",
-            }
-
-        if deal_price is None:
-
-            return {
-                "status": "INVALID_PRICE",
-                "historical_low": None,
-                "reason": "Deal price could not be parsed",
-            }
-
-        # ----------------------------------------------------
-        # MINIMUM DEAL PRICE
-        # Strictly greater than ₹1,000
-        # ----------------------------------------------------
-
-        if deal_price <= 1000:
-
-            return {
-                "status": "PRICE_TOO_LOW",
-                "historical_low": None,
-                "reason": (
-                    f"Product price ₹{deal_price:,.0f} "
-                    f"is at or below minimum allowed price ₹1,000"
-                ),
-            }
-
-        # ----------------------------------------------------
-        # CATEGORY CHECK
-        # ----------------------------------------------------
-
-        category = classify_product(
-            product_title
-        )
-
-        if not category["allowed"]:
-
-            return {
-                "status": "CATEGORY_REJECT",
-                "historical_low": None,
-                "reason": category["reason"],
-            }
-
-        # ----------------------------------------------------
-        # RESOLVE SHORT URL
-        # ----------------------------------------------------
-
-        resolved_url = url
 
         if url:
+            cleaned.append(url)
 
-            resolved, resolve_error = resolve_url(
-                url
-            )
-
-            if resolved:
-
-                resolved_url = resolved
-
-            else:
-
-                # Do not fail the entire deal solely because
-                # a short URL could not be resolved.
-                #
-                # But make the reason explicit if history lookup
-                # subsequently fails.
-                resolved_url = url
-
-        # ----------------------------------------------------
-        # PRICEHISTORY LOOKUP
-        # ----------------------------------------------------
-
-        history = pricehistory_lookup(
-            product_title,
-            merchant_url=resolved_url
-        )
-
-        if not history.get("found"):
-
-            return {
-                "status": "PRICE_HISTORY_NOT_FOUND",
-                "historical_low": None,
-                "reason": history.get(
-                    "reason",
-                    "Could not verify historical price"
-                ),
-            }
-
-        historical_low = parse_price(
-            history.get("historical_low")
-        )
-
-        if historical_low is None:
-
-            return {
-                "status": "PRICE_HISTORY_NOT_FOUND",
-                "historical_low": None,
-                "reason": (
-                    "PriceHistory record found but "
-                    "historical low is invalid"
-                ),
-            }
-
-        # ----------------------------------------------------
-        # PRODUCT MATCH SAFETY
-        # ----------------------------------------------------
-
-        similarity = history.get(
-            "similarity",
-            0
-        )
-
-        if similarity < 0.35:
-
-            return {
-                "status": "PRODUCT_MISMATCH",
-                "historical_low": historical_low,
-                "reason": (
-                    "PriceHistory product does not match "
-                    "the deal product sufficiently"
-                ),
-            }
-
-        # ----------------------------------------------------
-        # SUSPICIOUS HISTORY SAFETY
-        # ----------------------------------------------------
-
-        suspicious, suspicious_reason = (
-            suspicious_historical_low(
-                product_title,
-                deal_price,
-                historical_low
-            )
-        )
-
-        if suspicious:
-
-            return {
-                "status": "SUSPICIOUS_HISTORY",
-                "historical_low": historical_low,
-                "reason": suspicious_reason,
-            }
-
-        # ----------------------------------------------------
-        # FINAL PRICE COMPARISON
-        # ----------------------------------------------------
-
-        result = compare_price(
-            deal_price,
-            historical_low
-        )
-
-        # Add useful metadata
-        result["product_title"] = product_title
-        result["deal_price"] = deal_price
-        result["source"] = source
-        result["url"] = resolved_url
-        result["matched_title"] = history.get(
-            "matched_title"
-        )
-        result["similarity"] = similarity
-
-        return result
-
-    except Exception as exc:
-
-        return {
-            "status": "VALIDATOR_ERROR",
-            "historical_low": None,
-            "reason": (
-                f"Validator exception: "
-                f"{type(exc).__name__}: {exc}"
-            ),
-        }
+    return list(dict.fromkeys(cleaned))
 
 
 # ============================================================
-# OPTIONAL TEST
+# PRICE EXTRACTION
+# ============================================================
+
+def extract_deal_price(text):
+
+    if not text:
+        return None
+
+    patterns = [
+
+        r"(?:deal\s*price|deal\s*at)"
+        r"\s*[:\-]?\s*(?:₹|rs\.?|inr)?\s*([\d,]+)",
+
+        r"(?:offer\s*price|offer)"
+        r"\s*[:\-]?\s*(?:₹|rs\.?|inr)?\s*([\d,]+)",
+
+        r"(?:sale\s*price)"
+        r"\s*[:\-]?\s*(?:₹|rs\.?|inr)?\s*([\d,]+)",
+
+        r"(?:current\s*price)"
+        r"\s*[:\-]?\s*(?:₹|rs\.?|inr)?\s*([\d,]+)",
+
+        r"(?:buy\s*at|now\s*at)"
+        r"\s*[:\-]?\s*(?:₹|rs\.?|inr)?\s*([\d,]+)",
+
+        r"(?:₹|rs\.?|inr)\s*([\d,]+)",
+    ]
+
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
+            text,
+            re.I,
+        )
+
+        if match:
+
+            try:
+                return float(
+                    match.group(1).replace(
+                        ",",
+                        "",
+                    )
+                )
+
+            except Exception:
+                pass
+
+    return None
+
+
+# ============================================================
+# TITLE EXTRACTION
+# ============================================================
+
+def extract_product_title(text):
+
+    if not text:
+        return "Unknown Product"
+
+    lines = [
+        x.strip()
+        for x in text.splitlines()
+        if x.strip()
+    ]
+
+    ignored = [
+        "deal",
+        "offer",
+        "buy now",
+        "click here",
+        "shop now",
+        "limited time",
+        "amazon",
+        "flipkart",
+    ]
+
+    for line in lines:
+
+        if len(line) < 4:
+            continue
+
+        lower = line.lower()
+
+        if lower in ignored:
+            continue
+
+        if line.startswith(
+            (
+                "http://",
+                "https://",
+            )
+        ):
+            continue
+
+        if re.fullmatch(
+            r"[\d₹$€£,\.\s]+",
+            line,
+        ):
+            continue
+
+        return line[:300]
+
+    return lines[0][:300] if lines else "Unknown Product"
+
+
+# ============================================================
+# VALIDATOR RESULT NORMALIZATION
+# ============================================================
+
+def normalize_validation_result(result):
+
+    if isinstance(result, dict):
+
+        return {
+            "status": result.get(
+                "status",
+                "UNKNOWN",
+            ),
+            "historical_low": result.get(
+                "historical_low"
+            ),
+            "reason": result.get(
+                "reason"
+            )
+            or result.get(
+                "reject_reason"
+            )
+            or result.get(
+                "message"
+            )
+            or "Validator returned no reason",
+        }
+
+    if isinstance(result, tuple):
+
+        status = (
+            result[0]
+            if len(result) > 0
+            else "UNKNOWN"
+        )
+
+        historical_low = (
+            result[1]
+            if len(result) > 1
+            else None
+        )
+
+        reason = (
+            result[2]
+            if len(result) > 2
+            else "Validator returned no reason"
+        )
+
+        return {
+            "status": status,
+            "historical_low": historical_low,
+            "reason": reason,
+        }
+
+    if isinstance(result, str):
+
+        return {
+            "status": result,
+            "historical_low": None,
+            "reason": "Validator returned no reason",
+        }
+
+    return {
+        "status": "UNKNOWN",
+        "historical_low": None,
+        "reason": "Invalid validator response",
+    }
+
+
+# ============================================================
+# LOGGING
+# ============================================================
+
+async def send_log(message):
+
+    timestamp = datetime.now().strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+
+    final_message = (
+        f"[{timestamp}] "
+        f"{message}"
+    )
+
+    print(final_message)
+
+    if not LOG_CHANNEL:
+        return
+
+    try:
+
+        await client.send_message(
+            LOG_CHANNEL,
+            final_message,
+        )
+
+    except Exception as e:
+
+        print(
+            "LOG CHANNEL ERROR:",
+            type(e).__name__,
+            str(e),
+        )
+
+
+async def log_info(message):
+
+    await send_log(
+        f"ℹ️ {message}"
+    )
+
+
+async def log_error(message):
+
+    await send_log(
+        f"❌ ERROR: {message}"
+    )
+
+
+async def log_heartbeat():
+
+    await send_log(
+        "💓 HEARTBEAT | "
+        f"version={VERSION} | "
+        f"channels={len(known_channels)} | "
+        f"processed={len(processed_urls)} | "
+        f"destination={DESTINATION}"
+    )
+
+
+# ============================================================
+# REJECT LOG
+# ============================================================
+
+async def reject(
+    reason,
+    status,
+    source,
+    product,
+    price,
+    url,
+):
+
+    message = (
+        "❌ REJECT\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"📝 Reason: {reason}\n"
+        f"📊 Status: {status}\n"
+        f"📢 Source: {source}\n"
+        f"📦 Product: {product}\n"
+        f"💰 Price: ₹{price if price is not None else 'N/A'}\n"
+        f"🔗 URL: {url}\n"
+        "━━━━━━━━━━━━━━━━━━"
+    )
+
+    await send_log(message)
+
+
+# ============================================================
+# ACCEPTED DEAL
+# ============================================================
+
+async def send_deal(
+    product,
+    price,
+    url,
+    source,
+    validation,
+):
+
+    status = validation["status"]
+    historical_low = validation.get(
+        "historical_low"
+    )
+
+    if status == "NEW_LOW":
+
+        headline = "🔥 NEW ALL-TIME LOW"
+
+    else:
+
+        headline = "🟢 NEAR HISTORICAL LOW"
+
+    message = (
+        f"{headline}\n\n"
+        f"📦 {product}\n\n"
+        f"💰 Deal Price: ₹{price:.0f}\n"
+    )
+
+    if historical_low is not None:
+
+        message += (
+            f"📉 Historical Low: "
+            f"₹{historical_low:.0f}\n"
+        )
+
+    message += (
+        f"📢 Source: {source}\n\n"
+        f"🔗 {url}"
+    )
+
+    try:
+
+        await client.send_message(
+            DESTINATION,
+            message,
+        )
+
+        await log_info(
+            f"✅ ACCEPTED | "
+            f"{status} | "
+            f"{product} | "
+            f"₹{price:.0f} | "
+            f"{source}"
+        )
+
+        return True
+
+    except Exception as e:
+
+        await log_error(
+            f"Destination send failed: "
+            f"{type(e).__name__}: {e}"
+        )
+
+        return False
+
+
+# ============================================================
+# PROCESS DEAL
+# ============================================================
+
+async def process_deal(
+    text,
+    source,
+):
+
+    if not text:
+        return
+
+    urls = extract_urls(text)
+
+    if not urls:
+        return
+
+    product = extract_product_title(
+        text
+    )
+
+    price = extract_deal_price(
+        text
+    )
+
+    if price is None:
+
+        await reject(
+            "Deal price could not be extracted",
+            "PRICE_UNKNOWN",
+            source,
+            product,
+            None,
+            urls[0],
+        )
+
+        return
+
+    if price <= MIN_PRICE:
+
+        await reject(
+            f"Price must be above ₹{MIN_PRICE}",
+            "PRICE_REJECT",
+            source,
+            product,
+            price,
+            urls[0],
+        )
+
+        return
+
+    for url in urls:
+
+        if url in processed_urls:
+
+            continue
+
+        try:
+
+            validation_raw = await asyncio.to_thread(
+                validate_deal,
+                product,
+                price,
+                url,
+                source,
+                text,
+            )
+
+            validation = normalize_validation_result(
+                validation_raw
+            )
+
+        except Exception as e:
+
+            await log_error(
+                f"Validator exception | "
+                f"{type(e).__name__}: {e}\n"
+                f"{traceback.format_exc()}"
+            )
+
+            continue
+
+        status = validation["status"]
+
+        if status not in (
+            "NEW_LOW",
+            "NEAR_LOW",
+        ):
+
+            await reject(
+                validation["reason"],
+                status,
+                source,
+                product,
+                price,
+                url,
+            )
+
+            # Do not permanently mark rejected URLs.
+            continue
+
+        sent = await send_deal(
+            product,
+            price,
+            url,
+            source,
+            validation,
+        )
+
+        if sent:
+
+            processed_urls.add(url)
+
+            save_state()
+
+
+# ============================================================
+# CHANNEL DISCOVERY
+# ============================================================
+
+async def discover_channels():
+
+    try:
+
+        dialogs = await client.get_dialogs()
+
+        new_channels = 0
+
+        for dialog in dialogs:
+
+            entity = dialog.entity
+
+            if not getattr(
+                entity,
+                "broadcast",
+                False,
+            ):
+                continue
+
+            channel_id = entity.id
+
+            if channel_id not in known_channels:
+
+                known_channels[channel_id] = entity
+
+                new_channels += 1
+
+                username = getattr(
+                    entity,
+                    "username",
+                    None,
+                )
+
+                name = getattr(
+                    entity,
+                    "title",
+                    None,
+                ) or (
+                    f"@{username}"
+                    if username
+                    else str(channel_id)
+                )
+
+                await log_info(
+                    f"📢 NEW CHANNEL DISCOVERED: "
+                    f"{name}"
+                )
+
+        if new_channels:
+
+            await log_info(
+                f"📡 Channel discovery complete | "
+                f"total={len(known_channels)}"
+            )
+
+    except Exception as e:
+
+        await log_error(
+            f"Channel discovery failed: "
+            f"{type(e).__name__}: {e}"
+        )
+
+
+# ============================================================
+# CHANNEL REFRESH
+# ============================================================
+
+async def channel_refresh_loop():
+
+    while True:
+
+        try:
+
+            await asyncio.sleep(
+                CHANNEL_REFRESH_SECONDS
+            )
+
+            await discover_channels()
+
+        except asyncio.CancelledError:
+
+            raise
+
+        except Exception as e:
+
+            await log_error(
+                f"Channel refresh error: "
+                f"{type(e).__name__}: {e}"
+            )
+
+
+# ============================================================
+# HEARTBEAT
+# ============================================================
+
+async def heartbeat_loop():
+
+    while True:
+
+        try:
+
+            await asyncio.sleep(
+                HEARTBEAT_SECONDS
+            )
+
+            await log_heartbeat()
+
+        except asyncio.CancelledError:
+
+            raise
+
+        except Exception as e:
+
+            print(
+                "HEARTBEAT ERROR:",
+                type(e).__name__,
+                e,
+            )
+
+
+# ============================================================
+# WEB SCANNER
+# ============================================================
+
+async def web_scan_loop():
+
+    while True:
+
+        try:
+
+            await asyncio.sleep(
+                WEB_SCAN_SECONDS
+            )
+
+            await log_info(
+                "🌐 WEB SCAN STARTED"
+            )
+
+            candidates = await asyncio.to_thread(
+                get_all_web_deals
+            )
+
+            if not candidates:
+
+                await log_info(
+                    "🌐 WEB SCAN COMPLETE | "
+                    "candidates=0"
+                )
+
+                continue
+
+            await log_info(
+                f"🌐 WEB SCAN COMPLETE | "
+                f"candidates={len(candidates)}"
+            )
+
+            for candidate in candidates:
+
+                if not isinstance(
+                    candidate,
+                    dict,
+                ):
+                    continue
+
+                text = candidate.get(
+                    "text",
+                    "",
+                )
+
+                source = candidate.get(
+                    "source",
+                    "WEB",
+                )
+
+                url = candidate.get(
+                    "url"
+                )
+
+                if url and url not in text:
+
+                    text = (
+                        f"{text}\n"
+                        f"{url}"
+                    )
+
+                await process_deal(
+                    text,
+                    source,
+                )
+
+        except asyncio.CancelledError:
+
+            raise
+
+        except Exception as e:
+
+            await log_error(
+                f"Web scan error: "
+                f"{type(e).__name__}: {e}"
+            )
+
+
+# ============================================================
+# TELEGRAM NEW MESSAGE
+# ============================================================
+
+@client.on(events.NewMessage)
+async def new_message_handler(event):
+
+    try:
+
+        chat = await event.get_chat()
+
+        if not getattr(
+            chat,
+            "broadcast",
+            False,
+        ):
+            return
+
+        source = (
+            getattr(
+                chat,
+                "username",
+                None,
+            )
+        )
+
+        if source:
+
+            source = f"@{source}"
+
+        else:
+
+            source = getattr(
+                chat,
+                "title",
+                str(chat.id),
+            )
+
+        text = event.raw_text or ""
+
+        await process_deal(
+            text,
+            source,
+        )
+
+    except Exception as e:
+
+        await log_error(
+            f"NewMessage handler error: "
+            f"{type(e).__name__}: {e}"
+        )
+
+
+# ============================================================
+# TELEGRAM EDITED MESSAGE
+# ============================================================
+
+@client.on(events.MessageEdited)
+async def edited_message_handler(event):
+
+    try:
+
+        chat = await event.get_chat()
+
+        if not getattr(
+            chat,
+            "broadcast",
+            False,
+        ):
+            return
+
+        source = (
+            getattr(
+                chat,
+                "username",
+                None,
+            )
+        )
+
+        if source:
+
+            source = f"@{source}"
+
+        else:
+
+            source = getattr(
+                chat,
+                "title",
+                str(chat.id),
+            )
+
+        text = event.raw_text or ""
+
+        await process_deal(
+            text,
+            source,
+        )
+
+    except Exception as e:
+
+        await log_error(
+            f"MessageEdited handler error: "
+            f"{type(e).__name__}: {e}"
+        )
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+async def main():
+
+    load_state()
+
+    print(
+        f"🚀 Loot Hunter v{VERSION} starting..."
+    )
+
+    await client.start()
+
+    me = await client.get_me()
+
+    username = getattr(
+        me,
+        "username",
+        None,
+    )
+
+    display_name = (
+        f"@{username}"
+        if username
+        else getattr(
+            me,
+            "first_name",
+            "Telegram User",
+        )
+    )
+
+    await log_info(
+        f"🚀 Loot Hunter v{VERSION} started | "
+        f"Telegram connected as: {display_name}"
+    )
+
+    await discover_channels()
+
+    await log_info(
+        f"👀 Listening to "
+        f"{len(known_channels)} broadcast channels"
+    )
+
+    tasks = [
+        asyncio.create_task(
+            channel_refresh_loop()
+        ),
+        asyncio.create_task(
+            heartbeat_loop()
+        ),
+        asyncio.create_task(
+            web_scan_loop()
+        ),
+    ]
+
+    try:
+
+        await client.run_until_disconnected()
+
+    finally:
+
+        for task in tasks:
+            task.cancel()
+
+        await asyncio.gather(
+            *tasks,
+            return_exceptions=True,
+        )
+
+
+# ============================================================
+# START
 # ============================================================
 
 if __name__ == "__main__":
 
-    test = validate_deal(
-        product_title=(
-            "Samsung Galaxy S23 5G "
-            "(Cream, 256 GB) (8 GB RAM)"
-        ),
-        deal_price=26499,
-        url="https://fkrt.co/SjusKq",
-        source="@vaasutechdeals",
-    )
+    try:
 
-    print("\n========== VALIDATOR TEST ==========")
+        asyncio.run(
+            main()
+        )
 
-    for key, value in test.items():
-        print(f"{key}: {value}")
+    except KeyboardInterrupt:
 
-    print("====================================\n")
+        print(
+            "🛑 Loot Hunter stopped"
+        )
+
+    except Exception as e:
+
+        print(
+            "FATAL ERROR:",
+            type(e).__name__,
+            str(e),
+        )
+
+        traceback.print_exc()
+
+        raise
