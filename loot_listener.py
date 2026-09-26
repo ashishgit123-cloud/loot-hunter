@@ -1,313 +1,840 @@
-import os
-import asyncio
-import re
-
-from dotenv import load_dotenv
-from telethon import TelegramClient, events
-from telethon.sessions import StringSession
-
+importos
+importre
+importjson
+importasyncio
+importrequests
+frombs4importBeautifulSoup
+fromurllib.parseimportquote_plus
+fromtelethonimportTelegramClient,events
+fromdotenvimportload_dotenv
+#=========================================================
+#ENV
+#=========================================================
 load_dotenv()
-
-API_ID = int(os.environ["TG_API_ID"])
-API_HASH = os.environ["TG_API_HASH"]
-TG_SESSION = os.environ["TG_SESSION"]
-
-SOURCE_CHANNELS = [
-    x.strip()
-    for x in os.environ.get(
-        "SOURCE_CHANNEL",
-        "@lootdeals2005,@pricehistory,@lootersindia"
-    ).split(",")
-    if x.strip()
+API_ID=int(os.getenv("TG_API_ID"))
+API_HASH=os.getenv("TG_API_HASH")
+SESSION=os.getenv("TG_SESSION")
+SOURCE_CHANNELS=[
+x.strip()
+forxinos.getenv(
+"SOURCE_CHANNEL",
+"@lootdeals2005,@pricehistory,@lootersindia"
+).split(",")
+ifx.strip()
 ]
-
-DESTINATION_CHANNEL = os.environ.get(
-    "DESTINATION_CHANNEL",
-    "@lootersAmer"
+PRIVATE_CHANNEL_NAMES=[
+"Offerzone2.0"
+]
+PRIORITY_KEYWORDS=[
+x.strip().lower()
+forxinos.getenv(
+"PRIORITY_KEYWORDS",
+"iphone,furniture,samsung_ultra"
+).split(",")
+ifx.strip()
+]
+STATE_FILE="deal_state.json"
+#=========================================================
+#TELEGRAMCLIENT
+#=========================================================
+client=TelegramClient(
+SESSION,
+API_ID,
+API_HASH
+)
+#=========================================================
+#MONITOREDSOURCEIDS
+#=========================================================
+MONITORED_CHAT_IDS=set()
+MONITORED_SOURCE_NAMES={}
+#=========================================================
+#STATE
+#=========================================================
+defload_state():
+try:
+withopen(STATE_FILE,"r",encoding="utf-8")asf:
+returnjson.load(f)
+exceptException:
+return{}
+STATE=load_state()
+defsave_state():
+try:
+withopen(STATE_FILE,"w",encoding="utf-8")asf:
+json.dump(
+STATE,
+f,
+indent=2,
+ensure_ascii=False
+)
+exceptExceptionase:
+print("⚠️Statesaveerror:",e)
+#=========================================================
+#PRODUCTFILTERS
+#=========================================================
+ACCESSORY_TERMS=[
+"cover",
+"case",
+"cable",
+"charger",
+"chargingcable",
+"adapter",
+"screenprotector",
+"temperedglass",
+"backglass",
+"screenguard",
+"screenfilm",
+"skin",
+"sleeve",
+"holder",
+"mount",
+"stand",
+"lensprotector",
+"cameraprotector",
+"replacement",
+"batteryreplacement",
+"displayreplacement",
+"lcd",
+"screenreplacement",
+"strap",
+"earphone",
+"earphones",
+"airpods",
+"galaxybuds",
+"watch",
+"smartwatch",
+]
+FURNITURE_POSITIVE=[
+"sofa",
+"couch",
+"recliner",
+"sectional",
+"sofaset",
+"bed",
+"kingbed",
+"queenbed",
+"doublebed",
+"singlebed",
+"bunkbed",
+"wardrobe",
+"almirah",
+"diningtable",
+"diningchair",
+"diningset",
+"coffeetable",
+"sidetable",
+"studytable",
+"officetable",
+"desk",
+"officechair",
+"studychair",
+"recliningchair",
+"bookshelf",
+"bookshelf",
+"shoerack",
+"shoecabinet",
+"tvunit",
+"tvcabinet",
+"tvstand",
+"dresser",
+"cabinet",
+"drawer",
+"chestofdrawers",
+"storagecabinet",
+"furniture",
+]
+FURNITURE_HARD_REJECT=[
+"anklesupporter",
+"anklesupport",
+"kneesupporter",
+"kneesupport",
+"wristsupport",
+"backsupport",
+"elbowsupport",
+"necksupport",
+"lumbarsupport",
+"brace",
+"orthopedic",
+"compression",
+"mattress",
+"bedsheet",
+"bedsheet",
+"pillow",
+"cushion",
+"curtain",
+"cleaner",
+"cleaning",
+"polish",
+"hinge",
+"handle",
+"knob",
+"screw",
+"bracket",
+"lamp",
+"light",
+"decor",
+"wallart",
+"clock",
+"carpet",
+"rug",
+"mat",
+"laptopstand",
+"mobilestand",
+"phonestand",
+"tabletstand",
+"monitorstand",
+]
+NORMAL_LOOT_TERMS=[
+"priceerror",
+"pricingerror",
+"priceglitch",
+"pricingglitch",
+"glitchdeal",
+"glitchprice",
+"errorprice",
+"errorpricing",
+"lootdeal",
+"loot",
+"crazyprice",
+"crazydeal",
+"mistakenlypriced",
+"wrongprice",
+"lowestever",
+"alltimelow",
+"all-timelow",
+"atl",
+"historicallow",
+"historiclow",
+"newlow",
+]
+#=========================================================
+#URLEXTRACTION
+#=========================================================
+URL_REGEX=re.compile(
+r"https?://[^\s<>\]\)]+",
+re.IGNORECASE
+)
+defextract_urls(text):
+ifnottext:
+return[]
+urls=URL_REGEX.findall(text)
+cleaned=[]
+forurlinurls:
+url=url.rstrip(".,;:!?)]}")
+ifurlnotincleaned:
+cleaned.append(url)
+returncleaned
+#=========================================================
+#PRICEEXTRACTION
+#=========================================================
+defextract_prices(text):
+ifnottext:
+return[]
+prices=[]
+patterns=[
+r"(?:₹|Rs\.?|INR)\s*([0-9][0-9,]*(?:\.[0-9]+)?)",
+r"([0-9][0-9,]*(?:\.[0-9]+)?)\s*(?:₹|rs|inr)",
+]
+forpatterninpatterns:
+formatchinre.findall(pattern,text,re.IGNORECASE):
+try:
+value=float(match.replace(",",""))
+prices.append(value)
+exceptException:
+pass
+returnlist(dict.fromkeys(prices))
+defget_lowest_price(text):
+prices=extract_prices(text)
+ifnotprices:
+returnNone
+returnmin(prices)
+#=========================================================
+#PRODUCTDETECTION
+#=========================================================
+defis_accessory(text):
+t=text.lower()
+returnany(termintforterminACCESSORY_TERMS)
+defis_iphone(text):
+t=text.lower()
+ifis_accessory(t):
+returnFalse
+patterns=[
+r"\biphone\s*(?:11|12|13|14|15|16|17)\b",
+r"\biphone\s*(?:11|12|13|14|15|16|17)\s*(?:pro|max|plus|promax)?\b",
+]
+returnany(re.search(p,t,re.IGNORECASE)forpinpatterns)
+defis_samsung_ultra(text):
+t=text.lower()
+ifis_accessory(t):
+returnFalse
+patterns=[
+r"\bs\d{2}\s*ultra\b",
+r"\bsamsung\s+s\d{2}\s*ultra\b",
+r"\bgalaxy\s+s\d{2}\s*ultra\b",
+]
+returnany(re.search(p,t,re.IGNORECASE)forpinpatterns)
+defis_furniture(text):
+t=text.lower()
+forrejectinFURNITURE_HARD_REJECT:
+ifrejectint:
+returnFalse
+returnany(termintforterminFURNITURE_POSITIVE)
+defget_product_type(text):
+ifis_iphone(text):
+return"iPhone"
+ifis_samsung_ultra(text):
+return"SamsungUltra"
+ifis_furniture(text):
+return"Furniture"
+returnNone
+#=========================================================
+#NORMALLOOTDETECTION
+#=========================================================
+deflooks_like_normal_loot(text):
+t=text.lower()
+returnany(termintforterminNORMAL_LOOT_TERMS)
+#=========================================================
+#PRICEHISTORY
+#=========================================================
+defparse_money(value):
+ifvalueisNone:
+returnNone
+value=str(value)
+match=re.search(
+r"(?:₹|Rs\.?|INR)?\s*([0-9][0-9,]*(?:\.[0-9]+)?)",
+value,
+re.IGNORECASE
+)
+ifnotmatch:
+returnNone
+try:
+returnfloat(match.group(1).replace(",",""))
+exceptException:
+returnNone
+defcheck_pricehistory(product_url):
+"""
+Best-effortpublicPriceHistorypagecheck.
+IfPriceHistorycannotberead,returns:
+{
+"status":"unknown"
+}
+Neverrejectsagenuinecandidatemerelybecause
+PriceHistoryisunavailable.
+"""
+try:
+search_url=(
+"https://pricehistory.app/?search="
++quote_plus(product_url)
+)
+headers={
+"User-Agent":(
+"Mozilla/5.0(WindowsNT10.0;Win64;x64)"
+"AppleWebKit/537.36Chrome/140Safari/537.36"
+)
+}
+response=requests.get(
+search_url,
+headers=headers,
+timeout=15
+)
+ifresponse.status_code!=200:
+return{"status":"unknown"}
+soup=BeautifulSoup(
+response.text,
+"html.parser"
+)
+page_text=soup.get_text(
+"",
+strip=True
+)
+lowest=None
+current=None
+lowest_match=re.search(
+r"Lowest(?:\s*Price)?\s*[:₹RsINR]*\s*([0-9][0-9,]*)",
+page_text,
+re.IGNORECASE
+)
+current_match=re.search(
+r"CurrentPrice\s*[:₹RsINR]*\s*([0-9][0-9,]*)",
+page_text,
+re.IGNORECASE
+)
+iflowest_match:
+lowest=parse_money(
+lowest_match.group(1)
+)
+ifcurrent_match:
+current=parse_money(
+current_match.group(1)
+)
+iflowestisNone:
+return{"status":"unknown"}
+return{
+"status":"ok",
+"lowest":lowest,
+"current":current,
+}
+exceptExceptionase:
+print("⚠️PriceHistoryerror:",e)
+return{
+"status":"unknown"
+}
+#=========================================================
+#PRICEHISTORYDECISION
+#=========================================================
+defvalidate_price(telegram_price,history):
+iftelegram_priceisNone:
+return"unknown"
+ifhistory.get("status")!="ok":
+return"unknown"
+lowest=history.get("lowest")
+iflowestisNone:
+return"unknown"
+#Atorbelowhistoricallow
+iftelegram_price<=lowest:
+return"accept"
+#Within2%ofhistoricallow
+iftelegram_price<=lowest*1.02:
+return"accept"
+#Clearlyabovehistoricallow
+return"reject"
+#=========================================================
+#DUPLICATE/STATE
+#=========================================================
+defnormalize_url(url):
+url=url.lower().strip()
+url=url.replace(
+"https://",
+""
+).replace(
+"http://",
+""
+)
+url=url.split("?")[0]
+returnurl.rstrip("/")
+defalready_seen(url,price):
+key=normalize_url(url)
+old=STATE.get(key)
+ifnotold:
+returnFalse
+old_price=old.get("price")
+ifold_priceisNone:
+returnFalse
+returnfloat(priceor0)>=float(old_price)
+defremember_deal(url,price,product_type):
+key=normalize_url(url)
+old=STATE.get(key)
+ifold:
+old_price=old.get("price")
+ifold_priceisnotNoneandpriceisnotNone:
+ifprice<old_price:
+old["price"]=price
+return
+STATE[key]={
+"price":price,
+"product_type":product_type
+}
+save_state()
+#=========================================================
+#SOURCERESOLUTION
+#=========================================================
+asyncdefresolve_sources():
+"""
+ResolveallmonitoredTelegramsourcesandstoretheirIDs.
+IMPORTANT:
+WedoNOTuseevents.NewMessage(chats=...).
+Instead:
+Telegramevent
+↓
+event.chat_id
+↓
+MONITORED_CHAT_IDS
+↓
+processmessage
+"""
+globalMONITORED_CHAT_IDS
+globalMONITORED_SOURCE_NAMES
+MONITORED_CHAT_IDS.clear()
+MONITORED_SOURCE_NAMES.clear()
+print("\n🔎ResolvingTelegramsources...\n")
+#-----------------------------------------------------
+#Firstloaddialogs.
+#ThisfillsTelethon'sentitycache.
+#-----------------------------------------------------
+try:
+dialogs=awaitclient.get_dialogs()
+print(
+f"📂Telegramdialogsloaded:{len(dialogs)}"
+)
+exceptExceptionase:
+print(
+"❌CouldnotloadTelegramdialogs:",
+e
+)
+dialogs=[]
+#-----------------------------------------------------
+#Publicchannels
+#-----------------------------------------------------
+forsourceinSOURCE_CHANNELS:
+clean_source=source.strip()
+ifnotclean_source:
+continue
+try:
+entity=awaitclient.get_entity(
+clean_source
+)
+chat_id=int(entity.id)
+MONITORED_CHAT_IDS.add(chat_id)
+username=getattr(
+entity,
+"username",
+None
+)
+title=getattr(
+entity,
+"title",
+None
+)
+display_name=(
+f"@{username}"
+ifusername
+elsetitleorclean_source
+)
+MONITORED_SOURCE_NAMES[
+chat_id
+]=display_name
+print(
+f"✅SOURCEFOUND|"
+f"{display_name}|"
+f"ID={chat_id}"
+)
+exceptExceptionase:
+print(
+f"❌SOURCENOTFOUND|"
+f"{clean_source}|"
+f"{e}"
+)
+#-----------------------------------------------------
+#Privatechannel:Offerzone2.0
+#-----------------------------------------------------
+forwanted_nameinPRIVATE_CHANNEL_NAMES:
+found=False
+fordialogindialogs:
+title=(
+getattr(
+dialog,
+"title",
+""
+)or""
 ).strip()
-
-PRIORITY_KEYWORDS = [
-    x.strip().lower()
-    for x in os.environ.get(
-        "PRIORITY_KEYWORDS",
-        "iphone,furniture"
-    ).split(",")
-    if x.strip()
-]
-
-client = TelegramClient(
-    StringSession(TG_SESSION),
-    API_ID,
-    API_HASH,
-    connection_retries=None,
-    retry_delay=5
+iftitle.lower()==wanted_name.lower():
+entity=dialog.entity
+chat_id=int(entity.id)
+MONITORED_CHAT_IDS.add(
+chat_id
+)
+MONITORED_SOURCE_NAMES[
+chat_id
+]=title
+print(
+f"✅PRIVATESOURCEFOUND|"
+f"{title}|"
+f"ID={chat_id}"
+)
+found=True
+break
+ifnotfound:
+print(
+f"❌PRIVATESOURCENOTFOUND|"
+f"{wanted_name}"
+)
+#-----------------------------------------------------
+#Finalsourcestatus
+#-----------------------------------------------------
+print("\n===================================")
+print("📡MONITOREDSOURCES")
+print("===================================")
+forchat_idinMONITORED_CHAT_IDS:
+print(
+f"✅{MONITORED_SOURCE_NAMES.get(chat_id,'Unknown')}"
+f"|ID={chat_id}"
+)
+print(
+f"\n🎯Totalmonitoredsources:"
+f"{len(MONITORED_CHAT_IDS)}"
+)
+print("===================================\n")
+#=========================================================
+#MESSAGEPROCESSOR
+#=========================================================
+asyncdefprocess_message(event):
+chat_id=event.chat_id
+ifchat_idnotinMONITORED_CHAT_IDS:
+return
+text=event.raw_textor""
+ifnottext.strip():
+return
+source_name=MONITORED_SOURCE_NAMES.get(
+chat_id,
+f"CHAT:{chat_id}"
+)
+#-----------------------------------------------------
+#RAWCAPTURE
+#-----------------------------------------------------
+print("\n📥MESSAGERECEIVED")
+print(
+f"📌Source:{source_name}"
+)
+print(
+f"🆔MessageID:{event.id}"
+)
+preview=text.replace(
+"\n",
+""
+)
+print(
+f"📝Text:{preview[:250]}"
+)
+#-----------------------------------------------------
+#PRODUCTTYPE
+#-----------------------------------------------------
+product_type=get_product_type(text)
+#-----------------------------------------------------
+#NORMALLOOT
+#-----------------------------------------------------
+normal_loot=looks_like_normal_loot(text)
+#-----------------------------------------------------
+#URLs
+#-----------------------------------------------------
+urls=extract_urls(text)
+#-----------------------------------------------------
+#Weneedeither:
+#
+#1.Knowntargetproduct
+#OR
+#2.Strongnormallootlanguage
+#
+#Otherwiseignore.
+#-----------------------------------------------------
+ifnotproduct_typeandnotnormal_loot:
+print("⏭️Ignored:noloot/productsignal")
+return
+ifnoturls:
+print("⏭️CandidatefoundbutnoURL")
+return
+telegram_price=get_lowest_price(text)
+#-----------------------------------------------------
+#CHECKEACHURL
+#-----------------------------------------------------
+forurlinurls:
+print(
+f"🔗CheckingURL:{url}"
+)
+#-------------------------------------------------
+#PRICEHISTORY
+#-------------------------------------------------
+history=check_pricehistory(
+url
+)
+validation=validate_price(
+telegram_price,
+history
+)
+#-------------------------------------------------
+#HARDREJECTONLYWHENHISTORYCONFIRMS
+#-------------------------------------------------
+ifvalidation=="reject":
+print(
+"❌Rejected:"
+"PriceHistorypriceissignificantlylower"
+)
+continue
+#-------------------------------------------------
+#DUPLICATECHECK
+#-------------------------------------------------
+ifalready_seen(
+url,
+telegram_price
+):
+print(
+"⏭️Duplicate/same-or-higherprice"
+)
+continue
+#-------------------------------------------------
+#ACCEPT
+#
+#PriceHistory:
+#ACCEPT=historicallow/nearlow
+#UNKNOWN=cannotvalidate
+#
+#UNKNOWNisintentionallyNOTrejected.
+#-------------------------------------------------
+remember_deal(
+url,
+telegram_price,
+product_type
+)
+#-------------------------------------------------
+#BUILDALERT
+#-------------------------------------------------
+ifproduct_type:
+title=product_type
+else:
+title="🔥LootDeal"
+ifhistory.get("status")=="ok":
+lowest=history.get(
+"lowest"
+)
+history_line=(
+f"📉HistoricalLow:₹{lowest:,.0f}"
+iflowestisnotNone
+else"📉HistoricalLow:Unknown"
+)
+else:
+history_line=(
+"📉PriceHistory:Notavailable"
+)
+price_line=(
+f"💰Price:₹{telegram_price:,.0f}"
+iftelegram_priceisnotNone
+else"💰Price:Notdetected"
+)
+alert=f"""
+🚨LOOTALERT
+📦Type:{title}
+{price_line}
+{history_line}
+📡Source:{source_name}
+🔗{url}
+🆔Message:{event.id}
+""".strip()
+print("\n🚨ALERTGENERATED")
+print(alert)
+#-------------------------------------------------
+#SENDTOSAVEDMESSAGES
+#-------------------------------------------------
+try:
+awaitclient.send_message(
+"me",
+alert,
+link_preview=False
+)
+print(
+"📨AlertsenttoSavedMessages"
+)
+exceptExceptionase:
+print(
+"❌Alertsenderror:",
+e
+)
+#=========================================================
+#NEWMESSAGEHANDLER
+#=========================================================
+@client.on(events.NewMessage)
+asyncdefnew_message_handler(event):
+try:
+#IMPORTANT:
+#Globallistenerreceiveseverything.
+#Weimmediatelyignorechatsthatarenot
+#inourmonitoredsourcelist.
+ifevent.chat_idnotinMONITORED_CHAT_IDS:
+return
+awaitprocess_message(event)
+exceptExceptionase:
+print(
+"❌NewMessagehandlererror:",
+e
+)
+#=========================================================
+#EDITEDMESSAGEHANDLER
+#=========================================================
+@client.on(events.MessageEdited)
+asyncdefedited_message_handler(event):
+try:
+ifevent.chat_idnotinMONITORED_CHAT_IDS:
+return
+print(
+"\n✏️MESSAGEEDITED"
+)
+awaitprocess_message(event)
+exceptExceptionase:
+print(
+"❌MessageEditedhandlererror:",
+e
+)
+#=========================================================
+#MAIN
+#=========================================================
+asyncdefmain():
+print("🚀StartingLootHunter...")
+awaitclient.start()
+print(
+"✅Telegramconnected"
+)
+me=awaitclient.get_me()
+print(
+f"👤Loggedinas:"
+f"{getattr(me,'first_name','')}"
+)
+#ResolvesourceIDs.
+awaitresolve_sources()
+ifnotMONITORED_CHAT_IDS:
+print(
+"\n❌NOMONITOREDSOURCESFOUND."
+)
+print(
+"CheckSOURCE_CHANNELandmakesure"
+"yourTelegramaccounthasaccess."
+)
+return
+print(
+"\n👀Listeningfornewmessages..."
+)
+print(
+"🔄Alsomonitoringeditedmessages..."
+)
+print(
+"\nPressCtrl+Ctostop.\n"
+)
+awaitclient.run_until_disconnected()
+#=========================================================
+#RUN
+#=========================================================
+if__name__=="__main__":
+try:
+asyncio.run(
+main()
+)
+exceptKeyboardInterrupt:
+print(
+"\n🛑LootHunterstopped."
+)
+exceptExceptionase:
+print(
+"\n💥Fatalerror:",
+e
 )
 
-seen_messages = set()
-
-
-def get_priority_category(text):
-    t = text.lower()
-
-    iphone_ignore = [
-        "cover", "case", "cable", "charger",
-        "screen protector", "tempered glass",
-        "back glass", "skin", "sleeve", "adapter",
-        "holder", "stand", "lens protector",
-        "camera protector", "strap", "replacement",
-        "battery", "display", "screen",
-        "earphone", "airpods", "watch"
-    ]
-
-    furniture_ignore = [
-        "cover", "cushion cover", "table cover",
-        "mattress", "bedsheet", "curtain", "pillow",
-        "cleaner", "cleaning", "polish", "hardware",
-        "hinge", "handle", "knob", "screw",
-        "bracket", "stand", "mat", "carpet", "rug",
-        "lamp", "light", "decor", "decoration",
-        "wall art", "clock"
-    ]
-
-    for keyword in PRIORITY_KEYWORDS:
-
-        if keyword == "iphone":
-
-            if re.search(
-                r"\biphone\s*(?:11|12|13|14|15|16|17)\b",
-                t
-            ):
-                if any(word in t for word in iphone_ignore):
-                    return None
-
-                return "iphone"
-
-        elif keyword == "furniture":
-
-            furniture_items = [
-                "sofa", "couch", "recliner", "bed",
-                "wardrobe", "almirah", "dining table",
-                "dining chair", "table", "chair",
-                "bookshelf", "book shelf", "shoe rack",
-                "tv unit", "tv cabinet", "coffee table",
-                "side table", "study table", "office chair",
-                "computer table", "dresser", "cabinet",
-                "drawer", "furniture"
-            ]
-
-            if any(item in t for item in furniture_items):
-
-                if any(
-                    word in t
-                    for word in furniture_ignore
-                ):
-                    return None
-
-                return "furniture"
-
-    return None
-
-
-def is_normal_loot(text):
-    t = text.lower()
-
-    prices = re.findall(
-        r"(?:₹|rs\.?|inr)\s*([\d,]+)",
-        t,
-        flags=re.IGNORECASE
-    )
-
-    prices = [
-        int(x.replace(",", ""))
-        for x in prices
-        if x.replace(",", "").isdigit()
-    ]
-
-    strong_words = [
-        "price error",
-        "price glitch",
-        "pricing error",
-        "glitch deal",
-        "loot deal",
-        "loot",
-        "free",
-        "₹1",
-        "rs 1",
-        "rs. 1",
-        "₹99",
-        "rs 99",
-        "99 only"
-    ]
-
-    if any(word in t for word in strong_words):
-        return True
-
-    if any(price <= 199 for price in prices):
-        return True
-
-    discounts = re.findall(
-        r"(\d{2,3})\s*%\s*(?:off|discount)",
-        t
-    )
-
-    return any(int(x) >= 70 for x in discounts)
-
-
-async def process_message(event):
-    try:
-        text = event.raw_text or ""
-
-        if not text.strip():
-            return
-
-        chat = await event.get_chat()
-
-        username = getattr(chat, "username", None)
-        title = getattr(chat, "title", None)
-
-        if username:
-            source = f"@{username}"
-        elif title:
-            source = title
-        else:
-            source = "Telegram Channel"
-
-        message_key = (
-            getattr(chat, "id", None),
-            event.id
-        )
-
-        if message_key in seen_messages:
-            return
-
-        seen_messages.add(message_key)
-
-        category = get_priority_category(text)
-
-        if category == "iphone":
-            header = "📱🔥 IPHONE DEAL 🔥📱"
-
-        elif category == "furniture":
-            header = "🛋️🔥 FURNITURE DEAL 🔥🛋️"
-
-        elif is_normal_loot(text):
-            header = "🔥🔥 POSSIBLE LOOT DEAL 🔥🔥"
-
-        else:
-            return
-
-        alert = (
-            f"{header}\n\n"
-            f"{text}\n\n"
-            f"📌 Source: {source}\n"
-            f"🆔 Post ID: {event.id}"
-        )
-
-        # Save a copy in Saved Messages
-        await client.send_message("me", alert)
-
-        # Send alert to destination channel
-        await client.send_message(
-            DESTINATION_CHANNEL,
-            alert
-        )
-
-        print()
-        print("🚨 ALERT SENT")
-        print(f"🏷️ Category: {category or 'loot'}")
-        print(f"📌 Source: {source}")
-        print(f"📤 Destination: {DESTINATION_CHANNEL}")
-        print(text)
-        print("-" * 60)
-
-    except Exception as e:
-
-        print(
-            f"❌ Handler error: "
-            f"{type(e).__name__}: {e}"
-        )
-
-
-async def heartbeat():
-
-    while True:
-
-        print(
-            "💚 Listener is alive and monitoring..."
-        )
-
-        await asyncio.sleep(60)
-
-
-async def main():
-
-    while True:
-
-        try:
-
-            print("🔄 Connecting to Telegram...")
-
-            await client.connect()
-
-            if not await client.is_user_authorized():
-
-                raise RuntimeError(
-                    "Telegram session is not authorized."
-                )
-
-            me = await client.get_me()
-
-            print(
-                f"✅ Telegram connected as: "
-                f"{me.first_name}"
-            )
-
-            print()
-            print("👀 Listening to:")
-
-            for source in SOURCE_CHANNELS:
-                print(f"   • {source}")
-
-            print()
-            print(
-                f"🎯 Priority: "
-                f"{', '.join(PRIORITY_KEYWORDS)}"
-            )
-
-            print()
-            print(
-                f"📤 Destination: "
-                f"{DESTINATION_CHANNEL}"
-            )
-
-            print()
-            print("🟢 Listener is running...")
-
-            client.add_event_handler(
-                process_message,
-                events.NewMessage(
-                    chats=SOURCE_CHANNELS
-                )
-            )
-
-            await asyncio.gather(
-                client.run_until_disconnected(),
-                heartbeat()
-            )
-
-        except Exception as e:
-
-            print(
-                f"❌ Runtime error: "
-                f"{type(e).__name__}: {e}"
-            )
-
-        print(
-            "🔄 Reconnecting in 10 seconds..."
-        )
-
-        await asyncio.sleep(10)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+Abkyakarnahai:
+
+1.GitHub→loot_listener.py
+2.Purapuranacodedelete
+3.Uparwalapuracodepaste
+4.Commitchanges
+5.Railwayautomaticallyredeploykarega.
+6.Railwaylogsmesabsepehleyedikhnachahiye:
+
+🚀StartingLootHunter...
+✅Telegramconnected
+👤Loggedinas:Ashish
+🔎ResolvingTelegramsources...
+📂Telegramdialogsloaded:...
+✅SOURCEFOUND|@lootdeals2005|ID=...
+✅SOURCEFOUND|@pricehistory|ID=...
+✅SOURCEFOUND|@lootersindia|ID=...
+✅PRIVATESOURCEFOUND|Offerzone2.0|ID=...
+🎯Totalmonitoredsources:4
+👀Listeningfornewmessages...
+
+**Sabseimportant:**abevents.NewMessage(chats=all_sources)walaclausehinahihai.Globaleventreceivehoga,phirevent.chat_idsehumsirf4monitoredchannelskoallowkarenge.YeTelethonkedocumentedentity/cachemodelkesaathzyadarobusthai.
+
+Agarlogsme4/4sourcesfoundaagaye,tonextstepmehumactualdealfiltering+PriceHistorymatchingkotestkarenge.
