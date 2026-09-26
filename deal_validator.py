@@ -1,23 +1,22 @@
 # ============================================================
-# DEAL VALIDATOR
-# Version: 2.2
-#
-# IMPORTANT:
-# - NO brand hardcoding
-# - NO model hardcoding
-# - Categories loaded from product_categories.txt
-# - Minimum price loaded from product_categories.txt
-# - Equal to historical low = NEW_LOW
-# - Within 3% OR ₹50 = NEAR_LOW
-# - Suspicious historical lows are rejected
-# - PriceHistory used for historical validation
+# DEAL VALIDATOR v2.3
+# ============================================================
+# Purpose:
+# - Read product categories from product_categories.txt
+# - No brand/model hardcoding
+# - Generic product/category matching
+# - PriceHistory validation
+# - NEW_LOW when current price <= historical low
+# - NEAR_LOW when within configured tolerance
+# - Reject products <= ₹1,000
 # ============================================================
 
 import os
 import re
+import html
 import requests
-from urllib.parse import quote, urljoin
 from bs4 import BeautifulSoup
+from urllib.parse import quote, urlparse
 
 
 # ============================================================
@@ -31,49 +30,162 @@ CATEGORY_FILE = os.path.join(
     "product_categories.txt"
 )
 
-DEFAULT_MIN_PRICE = 1000
+MIN_PRICE = 1000
 
-NEAR_LOW_PERCENT = 0.03
+NEAR_LOW_PERCENT = 3.0
 NEAR_LOW_MAX_RUPEES = 50
 
 REQUEST_TIMEOUT = 15
 
 HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Mozilla/5.0 "
+        "(Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 "
+        "(KHTML, like Gecko) "
         "Chrome/140.0 Safari/537.36"
     )
 }
 
 
 # ============================================================
-# TEXT HELPERS
+# CATEGORY FILE
+# ============================================================
+
+def load_category_file():
+    """
+    Reads product_categories.txt.
+
+    Returns:
+        {
+            "categories": [...],
+            "excluded": [...]
+        }
+    """
+
+    categories = []
+    excluded = []
+
+    if not os.path.exists(CATEGORY_FILE):
+        return categories, excluded
+
+    try:
+        with open(
+            CATEGORY_FILE,
+            "r",
+            encoding="utf-8"
+        ) as f:
+
+            lines = f.readlines()
+
+    except Exception:
+        return categories, excluded
+
+    in_exclude_section = False
+
+    for raw_line in lines:
+
+        line = raw_line.strip()
+
+        if not line:
+            continue
+
+        upper = line.upper()
+
+        # ----------------------------------------------------
+        # Detect exclude section
+        # ----------------------------------------------------
+
+        if (
+            "EXCLUDE / DO NOT TARGET" in upper
+            or "EXCLUDE" == upper
+        ):
+            in_exclude_section = True
+            continue
+
+        # ----------------------------------------------------
+        # Ignore headers / separators / comments
+        # ----------------------------------------------------
+
+        if line.startswith("="):
+            continue
+
+        if line.startswith("#"):
+            continue
+
+        if upper.startswith("DEAL BOT"):
+            continue
+
+        if upper.startswith("VERSION:"):
+            continue
+
+        if upper.startswith("PURPOSE:"):
+            continue
+
+        if upper.startswith("SOURCE-OF-TRUTH"):
+            continue
+
+        if upper.startswith("MINIMUM DEAL PRICE"):
+            continue
+
+        # ----------------------------------------------------
+        # Ignore numbered section headings
+        # Example:
+        # 1. ELECTRONICS & COMPUTING
+        # ----------------------------------------------------
+
+        if re.match(r"^\d+\.\s+", line):
+            continue
+
+        # ----------------------------------------------------
+        # Only process bullet lines
+        # ----------------------------------------------------
+
+        if not line.startswith("-"):
+            continue
+
+        value = line[1:].strip()
+
+        if not value:
+            continue
+
+        # Remove accidental duplicate spaces
+        value = re.sub(r"\s+", " ", value)
+
+        if in_exclude_section:
+            excluded.append(value)
+        else:
+            categories.append(value)
+
+    return categories, excluded
+
+
+# ============================================================
+# TEXT NORMALIZATION
 # ============================================================
 
 def normalize_text(text):
     if not text:
         return ""
 
-    text = str(text).lower()
+    text = html.unescape(str(text))
 
+    text = text.lower()
+
+    # Normalize common separators
+    text = text.replace("&", " and ")
     text = text.replace("/", " ")
+    text = text.replace("\\", " ")
     text = text.replace("-", " ")
     text = text.replace("_", " ")
 
-    text = re.sub(
-        r"[^a-z0-9₹ ]+",
-        " ",
-        text
-    )
+    # Remove punctuation
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
 
-    text = re.sub(
-        r"\s+",
-        " ",
-        text
-    )
+    # Normalize whitespace
+    text = re.sub(r"\s+", " ", text).strip()
 
-    return text.strip()
+    return text
 
 
 def tokenize(text):
@@ -82,355 +194,306 @@ def tokenize(text):
     if not normalized:
         return set()
 
-    return set(
-        word
-        for word in normalized.split()
-        if len(word) >= 3
-    )
+    return set(normalized.split())
 
 
 # ============================================================
-# CATEGORY MASTER LOADER
+# TOKEN HELPERS
 # ============================================================
 
-def load_category_master():
-
-    allowed = []
-    excluded = []
-
-    min_price = DEFAULT_MIN_PRICE
-
-    if not os.path.exists(CATEGORY_FILE):
-
-        print(
-            f"⚠️ Category file not found: "
-            f"{CATEGORY_FILE}"
-        )
-
-        return {
-            "allowed": [],
-            "excluded": [],
-            "min_price": DEFAULT_MIN_PRICE,
-        }
-
-    current_section = None
-
-    try:
-
-        with open(
-            CATEGORY_FILE,
-            "r",
-            encoding="utf-8"
-        ) as file:
-
-            for raw_line in file:
-
-                line = raw_line.strip()
-
-                if not line:
-                    continue
-
-                upper = line.upper()
-
-                # --------------------------------------------
-                # Ignore comments
-                # --------------------------------------------
-
-                if line.startswith("#"):
-                    continue
-
-                # --------------------------------------------
-                # EXCLUDE SECTION
-                # --------------------------------------------
-
-                if upper.startswith(
-                    "EXCLUDE / DO NOT TARGET"
-                ):
-
-                    current_section = "excluded"
-                    continue
-
-                # --------------------------------------------
-                # MINIMUM PRICE SECTION
-                # --------------------------------------------
-
-                if upper.startswith(
-                    "MINIMUM DEAL PRICE"
-                ):
-
-                    current_section = "minimum"
-                    continue
-
-                # --------------------------------------------
-                # Numbered category section
-                # Example:
-                # 1. ELECTRONICS
-                # --------------------------------------------
-
-                if re.match(
-                    r"^\d+\.\s+",
-                    line
-                ):
-
-                    current_section = "allowed"
-                    continue
-
-                # --------------------------------------------
-                # Minimum price
-                # --------------------------------------------
-
-                if current_section == "minimum":
-
-                    numbers = re.findall(
-                        r"\d[\d,]*",
-                        line
-                    )
-
-                    if numbers:
-
-                        try:
-
-                            value = int(
-                                numbers[0]
-                                .replace(",", "")
-                            )
-
-                            if value > 0:
-                                min_price = value
-
-                        except ValueError:
-                            pass
-
-                    continue
-
-                # --------------------------------------------
-                # Bullet item
-                # --------------------------------------------
-
-                if not line.startswith("-"):
-                    continue
-
-                item = line[1:].strip()
-
-                if not item:
-                    continue
-
-                if current_section == "allowed":
-
-                    allowed.append(item)
-
-                elif current_section == "excluded":
-
-                    excluded.append(item)
-
-        return {
-            "allowed": allowed,
-            "excluded": excluded,
-            "min_price": min_price,
-        }
-
-    except Exception as e:
-
-        print(
-            f"❌ Category file read error: {e}"
-        )
-
-        return {
-            "allowed": [],
-            "excluded": [],
-            "min_price": DEFAULT_MIN_PRICE,
-        }
+STOP_WORDS = {
+    "the",
+    "and",
+    "with",
+    "for",
+    "from",
+    "new",
+    "latest",
+    "original",
+    "official",
+    "best",
+    "premium",
+    "pro",
+    "plus",
+    "edition",
+    "model",
+    "product",
+    "online",
+    "sale",
+    "offer",
+    "offers",
+    "deal",
+    "deals",
+}
 
 
-CATEGORY_MASTER = load_category_master()
+def useful_tokens(text):
+    tokens = tokenize(text)
 
-ALLOWED_CATEGORIES = CATEGORY_MASTER["allowed"]
-
-EXCLUDED_KEYWORDS = CATEGORY_MASTER["excluded"]
-
-MIN_PRICE = CATEGORY_MASTER["min_price"]
+    return {
+        token
+        for token in tokens
+        if token not in STOP_WORDS
+        and len(token) >= 2
+    }
 
 
 # ============================================================
-# CATEGORY MATCHING
+# GENERIC CATEGORY MATCHING
 # ============================================================
 
-def category_tokens(category):
-
+def category_variants(category):
     """
-    Convert category name into useful tokens.
+    Creates generic matching variants from a category.
 
     Example:
+        Headphones
+        -> headphones
 
-    Mobile / Smartphone
-    ->
-    mobile, smartphone
-
-    Running Shoes
-    ->
-    running, shoes
+        Smartphones / Mobile Phones
+        -> smartphones mobile phones
+        -> smartphone mobile phone
     """
 
-    return tokenize(category)
+    variants = []
+
+    raw = category.strip()
+
+    if not raw:
+        return variants
+
+    variants.append(raw)
+
+    # Split slash alternatives
+    parts = re.split(r"/|,", raw)
+
+    for part in parts:
+
+        part = part.strip()
+
+        if not part:
+            continue
+
+        variants.append(part)
+
+        words = part.split()
+
+        # Singular/plural generic normalization
+        singular_words = []
+
+        for word in words:
+
+            if word.endswith("ies") and len(word) > 4:
+                singular_words.append(
+                    word[:-3] + "y"
+                )
+
+            elif word.endswith("s") and not word.endswith("ss"):
+                singular_words.append(
+                    word[:-1]
+                )
+
+            else:
+                singular_words.append(word)
+
+        variants.append(
+            " ".join(singular_words)
+        )
+
+    # Deduplicate
+    output = []
+
+    seen = set()
+
+    for item in variants:
+
+        normalized = normalize_text(item)
+
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            output.append(normalized)
+
+    return output
 
 
-def category_match_score(text, category):
+def phrase_match(product_text, category_variant):
+    """
+    Strong generic phrase match.
 
+    Example:
+        "wireless headphones bluetooth"
+        matches
+        "headphones"
+    """
+
+    product_normalized = normalize_text(product_text)
+    category_normalized = normalize_text(category_variant)
+
+    if not product_normalized or not category_normalized:
+        return False
+
+    # Exact phrase
+    if category_normalized in product_normalized:
+        return True
+
+    return False
+
+
+def category_matches(product_text, category):
     """
     Generic category matching.
 
-    No brands.
-    No product models.
-    No fixed product names.
+    No brands/models are used.
+
+    Matching order:
+    1. Exact category phrase
+    2. Category alternative phrase
+    3. Generic token matching
     """
 
-    text_tokens = tokenize(text)
+    if not product_text or not category:
+        return False
 
-    category_tokens_set = category_tokens(
-        category
-    )
+    product_normalized = normalize_text(product_text)
 
-    if not text_tokens or not category_tokens_set:
-        return 0.0
+    product_tokens = useful_tokens(product_text)
 
-    matched = (
-        text_tokens
-        .intersection(category_tokens_set)
-    )
+    for variant in category_variants(category):
 
-    if not matched:
-        return 0.0
+        # ----------------------------------------------------
+        # Exact phrase match
+        # ----------------------------------------------------
 
-    return (
-        len(matched)
-        /
-        len(category_tokens_set)
-    )
+        if phrase_match(
+            product_normalized,
+            variant
+        ):
+            return True
+
+        # ----------------------------------------------------
+        # Token match
+        # ----------------------------------------------------
+
+        category_tokens = useful_tokens(variant)
+
+        if not category_tokens:
+            continue
+
+        # All category words present
+        if category_tokens.issubset(product_tokens):
+            return True
+
+        # Single-word category
+        if len(category_tokens) == 1:
+
+            token = next(iter(category_tokens))
+
+            if token in product_tokens:
+                return True
+
+    return False
 
 
-def classify_product(
-    title,
-    extra_text=""
-):
+# ============================================================
+# EXCLUSION MATCHING
+# ============================================================
 
+def is_excluded(product_text, excluded):
     """
-    Classifies product using category master.
+    Checks excluded generic categories/items.
 
-    extra_text can contain information extracted
-    from PriceHistory/product page.
-
-    NO brand/model list is used.
+    Does NOT use brands/models.
     """
+
+    if not product_text:
+        return False, None
+
+    for item in excluded:
+
+        if category_matches(
+            product_text,
+            item
+        ):
+            return True, item
+
+    return False, None
+
+
+# ============================================================
+# PRODUCT CATEGORY CLASSIFICATION
+# ============================================================
+
+def classify_product(product_title, extra_text=""):
+    """
+    Generic classification using:
+        product title
+        extra metadata
+
+    Returns:
+        {
+            "accepted": bool,
+            "category": str|None,
+            "reason": str
+        }
+    """
+
+    categories, excluded = load_category_file()
 
     combined_text = " ".join(
-        [
-            title or "",
-            extra_text or "",
+        x for x in [
+            product_title,
+            extra_text
         ]
+        if x
     )
 
-    normalized = normalize_text(
-        combined_text
+    # --------------------------------------------------------
+    # Exclusions FIRST
+    # --------------------------------------------------------
+
+    excluded_match, excluded_item = is_excluded(
+        combined_text,
+        excluded
     )
 
-    if not normalized:
+    if excluded_match:
 
         return {
             "accepted": False,
-            "reason": "Product title/category information missing",
-            "matched_category": None,
-            "score": 0.0,
+            "category": None,
+            "reason": (
+                "Product matches excluded category: "
+                f"{excluded_item}"
+            )
         }
 
-    # ========================================================
-    # EXCLUSIONS FIRST
-    # ========================================================
+    # --------------------------------------------------------
+    # Category matching
+    # --------------------------------------------------------
 
-    for excluded in EXCLUDED_KEYWORDS:
+    for category in categories:
 
-        excluded_normalized = normalize_text(
-            excluded
-        )
-
-        if not excluded_normalized:
-            continue
-
-        if excluded_normalized in normalized:
-
-            return {
-                "accepted": False,
-                "reason": (
-                    f"Excluded product type: "
-                    f"{excluded}"
-                ),
-                "matched_category": None,
-                "score": 0.0,
-            }
-
-    # ========================================================
-    # ALLOWED CATEGORY MATCH
-    # ========================================================
-
-    best_category = None
-    best_score = 0.0
-
-    for category in ALLOWED_CATEGORIES:
-
-        score = category_match_score(
+        if category_matches(
             combined_text,
             category
-        )
-
-        if score > best_score:
-
-            best_score = score
-            best_category = category
-
-    # Strong enough category match
-    if best_category and best_score >= 0.50:
-
-        return {
-            "accepted": True,
-            "reason": (
-                f"Matched category: "
-                f"{best_category}"
-            ),
-            "matched_category": best_category,
-            "score": best_score,
-        }
-
-    # Single-token category match
-    # Useful for categories such as:
-    # Laptop, Monitor, Sofa, Drill etc.
-    for category in ALLOWED_CATEGORIES:
-
-        tokens = category_tokens(category)
-
-        if len(tokens) != 1:
-            continue
-
-        token = next(iter(tokens))
-
-        if token in tokenize(combined_text):
+        ):
 
             return {
                 "accepted": True,
+                "category": category,
                 "reason": (
-                    f"Matched category: "
+                    "Matched configured category: "
                     f"{category}"
-                ),
-                "matched_category": category,
-                "score": 1.0,
+                )
             }
 
     return {
         "accepted": False,
+        "category": None,
         "reason": (
             "Product category is outside "
             "configured deal categories"
-        ),
-        "matched_category": None,
-        "score": best_score,
+        )
     }
 
 
@@ -439,6 +502,9 @@ def classify_product(
 # ============================================================
 
 def resolve_url(url):
+    """
+    Resolves short URLs such as fkrt.co.
+    """
 
     if not url:
         return ""
@@ -452,647 +518,471 @@ def resolve_url(url):
             allow_redirects=True
         )
 
-        if response.url:
-            return response.url
+        return response.url or url
 
-    except Exception as e:
+    except Exception:
+        return url
 
-        print(
-            f"⚠️ URL resolve failed: {e}"
+
+# ============================================================
+# HTTP FETCH
+# ============================================================
+
+def fetch_page(url):
+    try:
+
+        response = requests.get(
+            url,
+            headers=HEADERS,
+            timeout=REQUEST_TIMEOUT,
+            allow_redirects=True
         )
 
-    return url
+        if response.status_code >= 400:
+            return ""
+
+        return response.text
+
+    except Exception:
+        return ""
 
 
 # ============================================================
-# PRICE PARSER
+# PRICE PARSING
 # ============================================================
 
-def normalize_price(value):
-
+def parse_price(value):
     if value is None:
         return None
 
-    if isinstance(value, (int, float)):
-
-        return float(value)
-
     text = str(value)
 
-    text = text.replace(
-        ",",
-        ""
-    )
+    text = text.replace(",", "")
+    text = text.replace("₹", "")
+    text = text.replace("Rs.", "")
+    text = text.replace("Rs", "")
+    text = text.replace("INR", "")
 
-    text = text.replace(
-        "₹",
-        ""
-    )
-
-    text = text.replace(
-        "Rs.",
-        ""
-    )
-
-    text = text.replace(
-        "Rs",
-        ""
-    )
-
-    text = text.replace(
-        "INR",
-        ""
-    )
-
-    numbers = re.findall(
-        r"\d+(?:\.\d+)?",
+    match = re.search(
+        r"(\d+(?:\.\d+)?)",
         text
     )
 
-    if not numbers:
+    if not match:
         return None
 
     try:
-
-        return float(
-            numbers[0]
-        )
-
-    except ValueError:
-
+        return float(match.group(1))
+    except Exception:
         return None
 
 
 # ============================================================
-# TITLE SIMILARITY
+# HISTORICAL LOW EXTRACTION
 # ============================================================
 
-def title_similarity(
-    title1,
-    title2
-):
+def extract_historical_low(text):
+    if not text:
+        return None
 
-    if not title1 or not title2:
-        return 0.0
+    patterns = [
 
-    a = tokenize(title1)
-    b = tokenize(title2)
+        r"all[\s\-]*time[\s\-]*low"
+        r".{0,120}?"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
 
-    if not a or not b:
-        return 0.0
+        r"historical[\s\-]*low"
+        r".{0,120}?"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
 
-    intersection = len(
-        a.intersection(b)
-    )
+        r"lowest[\s\-]*price"
+        r".{0,120}?"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
 
-    union = len(
-        a.union(b)
-    )
+        r"lowest[\s\-]*ever"
+        r".{0,120}?"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
 
-    if union == 0:
-        return 0.0
+        r"lowest"
+        r".{0,80}?"
+        r"(?:₹|rs\.?|inr)\s*"
+        r"([\d,]+(?:\.\d+)?)",
+    ]
 
-    return intersection / union
+    for pattern in patterns:
 
-
-# ============================================================
-# PRICEHISTORY SEARCH QUERIES
-# ============================================================
-
-def build_pricehistory_queries(
-    title
-):
-
-    normalized = normalize_text(
-        title
-    )
-
-    queries = []
-
-    if normalized:
-        queries.append(
-            normalized
+        match = re.search(
+            pattern,
+            text,
+            re.I | re.S
         )
 
-    # Remove RAM/storage/size noise
-    cleaned = re.sub(
-        r"\b\d+\s*(gb|tb|mb|inch|inches|ram)\b",
-        "",
-        normalized,
-        flags=re.IGNORECASE
-    )
+        if match:
 
-    cleaned = re.sub(
-        r"\s+",
-        " ",
-        cleaned
-    ).strip()
-
-    if cleaned and cleaned not in queries:
-
-        queries.append(
-            cleaned
-        )
-
-    words = cleaned.split()
-
-    if len(words) > 8:
-
-        short_query = " ".join(
-            words[:8]
-        )
-
-        if short_query not in queries:
-
-            queries.append(
-                short_query
+            price = parse_price(
+                match.group(1)
             )
 
-    return queries[:3]
+            if price is not None:
+                return price
+
+    # --------------------------------------------------------
+    # JSON-like / HTML keys
+    # --------------------------------------------------------
+
+    key_patterns = [
+
+        r'"lowestPrice"\s*:\s*"?([\d,.]+)',
+        r'"lowest_price"\s*:\s*"?([\d,.]+)',
+        r'"historicalLow"\s*:\s*"?([\d,.]+)',
+        r'"historical_low"\s*:\s*"?([\d,.]+)',
+        r'"allTimeLow"\s*:\s*"?([\d,.]+)',
+        r'"all_time_low"\s*:\s*"?([\d,.]+)',
+    ]
+
+    for pattern in key_patterns:
+
+        match = re.search(
+            pattern,
+            text,
+            re.I
+        )
+
+        if match:
+
+            price = parse_price(
+                match.group(1)
+            )
+
+            if price is not None:
+                return price
+
+    return None
+
+
+# ============================================================
+# TITLE EXTRACTION
+# ============================================================
+
+def extract_page_title(html_text):
+    if not html_text:
+        return ""
+
+    try:
+
+        soup = BeautifulSoup(
+            html_text,
+            "html.parser"
+        )
+
+        if soup.title:
+
+            title = soup.title.get_text(
+                " ",
+                strip=True
+            )
+
+            return title
+
+    except Exception:
+        pass
+
+    return ""
+
+
+# ============================================================
+# CATEGORY METADATA EXTRACTION
+# ============================================================
+
+def extract_category_metadata(html_text):
+    """
+    Extracts generic category information from page.
+
+    No brand/model assumptions.
+    """
+
+    if not html_text:
+        return ""
+
+    try:
+
+        soup = BeautifulSoup(
+            html_text,
+            "html.parser"
+        )
+
+        pieces = []
+
+        # Breadcrumbs
+        for element in soup.select(
+            "[class*='breadcrumb'], "
+            "[class*='category'], "
+            "[class*='Category']"
+        ):
+
+            text = element.get_text(
+                " ",
+                strip=True
+            )
+
+            if text:
+                pieces.append(text)
+
+        # Meta keywords
+        for meta in soup.find_all(
+            "meta"
+        ):
+
+            name = (
+                meta.get("name")
+                or meta.get("property")
+                or ""
+            ).lower()
+
+            if name in {
+                "keywords",
+                "category",
+                "product:category"
+            }:
+
+                content = meta.get(
+                    "content",
+                    ""
+                )
+
+                if content:
+                    pieces.append(content)
+
+        # Limit size
+        return " ".join(
+            pieces
+        )[:5000]
+
+    except Exception:
+        return ""
 
 
 # ============================================================
 # PRICEHISTORY SEARCH
 # ============================================================
 
-def fetch_pricehistory_search(
-    query
-):
+def search_pricehistory(product_title):
+    """
+    Attempts generic PriceHistory search.
+
+    Returns:
+        {
+            "title": ...,
+            "url": ...,
+            "historical_low": ...,
+            "category": ...,
+            "raw": ...
+        }
+
+    If unavailable, returns None.
+    """
+
+    if not product_title:
+        return None
+
+    query = quote(
+        product_title[:180]
+    )
 
     search_urls = [
 
-        (
-            "https://pricehistory.app/"
-            f"search?q={quote(query)}"
-        ),
+        f"https://pricehistory.app/search?q={query}",
 
-        (
-            "https://pricehistoryapp.com/"
-            f"search?q={quote(query)}"
-        ),
+        f"https://pricehistoryapp.com/search?q={query}",
     ]
 
     for search_url in search_urls:
 
-        try:
-
-            response = requests.get(
-                search_url,
-                headers=HEADERS,
-                timeout=REQUEST_TIMEOUT
-            )
-
-            if response.status_code != 200:
-                continue
-
-            return (
-                response.text,
-                response.url
-            )
-
-        except Exception as e:
-
-            print(
-                f"⚠️ PriceHistory search error "
-                f"for '{query}': {e}"
-            )
-
-    return None, None
-
-
-# ============================================================
-# PRICEHISTORY SEARCH RESULT PARSER
-# ============================================================
-
-def parse_pricehistory_results(
-    html,
-    original_title
-):
-
-    if not html:
-        return []
-
-    results = []
-
-    try:
-
-        soup = BeautifulSoup(
-            html,
-            "html.parser"
+        html_text = fetch_page(
+            search_url
         )
 
-        for a in soup.find_all(
-            "a",
-            href=True
-        ):
+        if not html_text:
+            continue
 
-            href = a.get(
-                "href",
-                ""
-            ).strip()
+        # ----------------------------------------------------
+        # Extract possible product URLs
+        # ----------------------------------------------------
 
-            text = a.get_text(
-                " ",
-                strip=True
+        links = []
+
+        try:
+
+            soup = BeautifulSoup(
+                html_text,
+                "html.parser"
             )
 
-            if not href or not text:
-                continue
+            for anchor in soup.find_all(
+                "a",
+                href=True
+            ):
 
-            if href.startswith("/"):
+                href = anchor.get(
+                    "href",
+                    ""
+                )
 
-                href = urljoin(
-                    "https://pricehistory.app",
+                anchor_text = anchor.get_text(
+                    " ",
+                    strip=True
+                )
+
+                if (
+                    "pricehistory" in href
+                    or "pricehistory" in search_url
+                ):
+
+                    if href.startswith("/"):
+                        href = (
+                            "https://pricehistory.app"
+                            + href
+                        )
+
+                    links.append(
+                        (
+                            href,
+                            anchor_text
+                        )
+                    )
+
+        except Exception:
+            links = []
+
+        # ----------------------------------------------------
+        # Try result pages
+        # ----------------------------------------------------
+
+        candidates = []
+
+        for href, anchor_text in links:
+
+            combined = (
+                anchor_text
+                + " "
+                + href
+            )
+
+            if product_title.lower() in combined.lower():
+
+                candidates.insert(
+                    0,
                     href
                 )
 
-            if (
-                "pricehistory"
-                not in href.lower()
-            ):
+            else:
+                candidates.append(
+                    href
+                )
+
+        # Remove duplicates
+        unique_candidates = []
+
+        seen = set()
+
+        for url in candidates:
+
+            if url in seen:
                 continue
 
-            similarity = title_similarity(
-                original_title,
-                text
+            seen.add(url)
+            unique_candidates.append(url)
+
+        # Limit requests
+        for product_url in unique_candidates[:5]:
+
+            page = fetch_page(
+                product_url
             )
 
-            if similarity >= 0.20:
-
-                results.append(
-                    {
-                        "title": text,
-                        "url": href,
-                        "similarity": similarity,
-                    }
-                )
-
-        results.sort(
-            key=lambda x: x["similarity"],
-            reverse=True
-        )
-
-        return results[:10]
-
-    except Exception as e:
-
-        print(
-            "⚠️ PriceHistory result parse error:",
-            e
-        )
-
-        return []
-
-
-# ============================================================
-# PRICEHISTORY PRODUCT PAGE
-# ============================================================
-
-def fetch_pricehistory_product(
-    url
-):
-
-    try:
-
-        response = requests.get(
-            url,
-            headers=HEADERS,
-            timeout=REQUEST_TIMEOUT
-        )
-
-        if response.status_code != 200:
-            return None
-
-        html = response.text
-
-        soup = BeautifulSoup(
-            html,
-            "html.parser"
-        )
-
-        page_text = soup.get_text(
-            " ",
-            strip=True
-        )
-
-        # ----------------------------------------------------
-        # HISTORICAL LOW
-        # ----------------------------------------------------
-
-        historical_low = None
-
-        patterns = [
-
-            (
-                r"all[\s\-]*time[\s\-]*low"
-                r"[^₹0-9]{0,80}"
-                r"₹?\s*([\d,]+)"
-            ),
-
-            (
-                r"lowest[\s\-]*price"
-                r"[^₹0-9]{0,80}"
-                r"₹?\s*([\d,]+)"
-            ),
-
-            (
-                r"historical[\s\-]*low"
-                r"[^₹0-9]{0,80}"
-                r"₹?\s*([\d,]+)"
-            ),
-
-            (
-                r"lowest"
-                r"[^₹0-9]{0,80}"
-                r"₹?\s*([\d,]+)"
-            ),
-        ]
-
-        for pattern in patterns:
-
-            match = re.search(
-                pattern,
-                page_text,
-                flags=re.IGNORECASE
-            )
-
-            if match:
-
-                historical_low = normalize_price(
-                    match.group(1)
-                )
-
-                if historical_low is not None:
-                    break
-
-        # ----------------------------------------------------
-        # RAW HTML / SCRIPT FALLBACK
-        # ----------------------------------------------------
-
-        if historical_low is None:
-
-            raw_patterns = [
-
-                r'"lowestPrice"\s*:\s*"?([\d.]+)"?',
-
-                r'"lowest_price"\s*:\s*"?([\d.]+)"?',
-
-                r'"historicalLow"\s*:\s*"?([\d.]+)"?',
-
-                r'"allTimeLow"\s*:\s*"?([\d.]+)"?',
-            ]
-
-            for pattern in raw_patterns:
-
-                match = re.search(
-                    pattern,
-                    html,
-                    flags=re.IGNORECASE
-                )
-
-                if match:
-
-                    historical_low = normalize_price(
-                        match.group(1)
-                    )
-
-                    if historical_low is not None:
-                        break
-
-        # ----------------------------------------------------
-        # CATEGORY / BREADCRUMB EXTRACTION
-        # ----------------------------------------------------
-
-        category_text_parts = []
-
-        # Breadcrumb-like elements
-        selectors = [
-            "nav",
-            "[class*='breadcrumb']",
-            "[class*='category']",
-            "[class*='product-category']",
-            "meta[property='product:category']",
-        ]
-
-        for selector in selectors:
-
-            try:
-
-                elements = soup.select(
-                    selector
-                )
-
-                for element in elements:
-
-                    if element.name == "meta":
-
-                        value = element.get(
-                            "content",
-                            ""
-                        )
-
-                    else:
-
-                        value = element.get_text(
-                            " ",
-                            strip=True
-                        )
-
-                    if value:
-
-                        category_text_parts.append(
-                            value
-                        )
-
-            except Exception:
+            if not page:
                 continue
 
+            low = extract_historical_low(
+                page
+            )
+
+            page_title = extract_page_title(
+                page
+            )
+
+            metadata = extract_category_metadata(
+                page
+            )
+
+            if low is not None:
+
+                return {
+                    "title": page_title,
+                    "url": product_url,
+                    "historical_low": low,
+                    "category": metadata,
+                    "raw": page
+                }
+
         # ----------------------------------------------------
-        # PAGE TITLE
+        # Search page itself may contain low
         # ----------------------------------------------------
 
-        page_title = ""
-
-        if soup.title:
-
-            page_title = soup.title.get_text(
-                " ",
-                strip=True
-            )
-
-        if page_title:
-
-            category_text_parts.append(
-                page_title
-            )
-
-        category_text = " ".join(
-            category_text_parts
+        low = extract_historical_low(
+            html_text
         )
 
-        if (
-            historical_low is None
-            and not category_text
-        ):
-            return None
+        if low is not None:
 
-        return {
-            "historical_low": historical_low,
-            "category_text": category_text,
-            "page_title": page_title,
-            "url": response.url,
-        }
+            return {
+                "title": "",
+                "url": search_url,
+                "historical_low": low,
+                "category": "",
+                "raw": html_text
+            }
 
-    except Exception as e:
-
-        print(
-            f"⚠️ PriceHistory product error: {e}"
-        )
-
-        return None
+    return None
 
 
 # ============================================================
-# PRICEHISTORY LOOKUP
-# ============================================================
-
-def pricehistory_lookup(
-    title,
-    deal_url=None
-):
-
-    resolved_url = resolve_url(
-        deal_url
-    )
-
-    queries = build_pricehistory_queries(
-        title
-    )
-
-    best_match = None
-
-    for query in queries:
-
-        html, search_url = (
-            fetch_pricehistory_search(
-                query
-            )
-        )
-
-        if not html:
-            continue
-
-        results = parse_pricehistory_results(
-            html,
-            title
-        )
-
-        for result in results:
-
-            if (
-                best_match is None
-                or result["similarity"]
-                > best_match["similarity"]
-            ):
-
-                best_match = result
-
-        if (
-            best_match
-            and best_match["similarity"]
-            >= 0.60
-        ):
-
-            break
-
-    if not best_match:
-
-        return None
-
-    product_data = (
-        fetch_pricehistory_product(
-            best_match["url"]
-        )
-    )
-
-    if not product_data:
-
-        return None
-
-    return {
-        "historical_low":
-            product_data.get(
-                "historical_low"
-            ),
-
-        "matched_title":
-            best_match.get(
-                "title"
-            ),
-
-        "pricehistory_url":
-            product_data.get(
-                "url"
-            ),
-
-        "similarity":
-            best_match.get(
-                "similarity"
-            ),
-
-        "category_text":
-            product_data.get(
-                "category_text",
-                ""
-            ),
-
-        "page_title":
-            product_data.get(
-                "page_title",
-                ""
-            ),
-
-        "resolved_deal_url":
-            resolved_url,
-    }
-
-
-# ============================================================
-# SUSPICIOUS HISTORICAL LOW
+# SUSPICIOUS HISTORICAL LOW CHECK
 # ============================================================
 
 def suspicious_historical_low(
     current_price,
     historical_low
 ):
+    """
+    Prevent obviously broken history values.
 
-    if not current_price:
+    Example:
+        Current = ₹25,000
+        Historical = ₹99
+
+    Such a value is suspicious and should not
+    automatically qualify the deal.
+    """
+
+    if current_price is None:
         return False
 
-    if not historical_low:
+    if historical_low is None:
         return False
 
-    # Extremely tiny historical value compared
-    # with current value is suspicious.
-    ratio = (
-        historical_low
-        /
-        current_price
-    )
-
-    if (
-        current_price >= 10000
-        and historical_low < 100
-    ):
+    if historical_low <= 0:
         return True
 
+    # Extremely low relative to current price
     if (
-        current_price >= 20000
-        and historical_low < 200
+        current_price >= 5000
+        and historical_low < current_price * 0.05
     ):
-        return True
-
-    if ratio < 0.01:
         return True
 
     return False
@@ -1106,418 +996,298 @@ def compare_price(
     current_price,
     historical_low
 ):
+    """
+    Returns:
 
-    current_price = normalize_price(
+        NEW_LOW
+            Current price <= historical low
+
+        NEAR_LOW
+            Within 3% OR ₹50
+
+        NOT_LOW
+            Otherwise
+    """
+
+    if (
+        current_price is None
+        or historical_low is None
+    ):
+        return (
+            "NOT_LOW",
+            "Historical low price unavailable"
+        )
+
+    # --------------------------------------------------------
+    # Equal historical low IS accepted
+    # --------------------------------------------------------
+
+    if current_price <= historical_low:
+
+        return (
+            "NEW_LOW",
+            (
+                "Current price is at or below "
+                "historical low"
+            )
+        )
+
+    difference = (
         current_price
+        - historical_low
     )
 
-    historical_low = normalize_price(
+    tolerance = max(
+        NEAR_LOW_MAX_RUPEES,
         historical_low
+        * NEAR_LOW_PERCENT
+        / 100
     )
 
-    if current_price is None:
+    if difference <= tolerance:
+
+        return (
+            "NEAR_LOW",
+            (
+                "Current price is within "
+                f"{NEAR_LOW_PERCENT}% / "
+                f"₹{NEAR_LOW_MAX_RUPEES} "
+                "of historical low"
+            )
+        )
+
+    return (
+        "NOT_LOW",
+        "Current price is above historical low"
+    )
+
+
+# ============================================================
+# VALIDATE DEAL
+# ============================================================
+
+def validate_deal(
+    product_title,
+    current_price,
+    url="",
+    source=""
+):
+
+    # --------------------------------------------------------
+    # Basic validation
+    # --------------------------------------------------------
+
+    if not product_title:
 
         return {
-            "status": "NOT_LOW",
-            "reason":
-                "Current price could not be parsed",
+            "status": "REJECT",
+            "historical_low": None,
+            "reason": "Product title is empty",
+            "category": None,
         }
+
+    try:
+        current_price = float(
+            current_price
+        )
+    except Exception:
+
+        return {
+            "status": "REJECT",
+            "historical_low": None,
+            "reason": "Invalid current price",
+            "category": None,
+        }
+
+    # --------------------------------------------------------
+    # Minimum price
+    # --------------------------------------------------------
+
+    if current_price <= MIN_PRICE:
+
+        return {
+            "status": "PRICE_REJECT",
+            "historical_low": None,
+            "reason": (
+                f"Product price ₹{current_price:.0f} "
+                f"is not above minimum ₹{MIN_PRICE}"
+            ),
+            "category": None,
+        }
+
+    # --------------------------------------------------------
+    # Resolve URL
+    # --------------------------------------------------------
+
+    resolved_url = resolve_url(
+        url
+    ) if url else ""
+
+    # --------------------------------------------------------
+    # FIRST: try title classification
+    # --------------------------------------------------------
+
+    classification = classify_product(
+        product_title
+    )
+
+    category_result = classification
+
+    # --------------------------------------------------------
+    # PriceHistory lookup
+    #
+    # Important:
+    # Even if title classification fails,
+    # we STILL continue to PriceHistory.
+    #
+    # This prevents model-only titles such as:
+    # "Samsung Galaxy S23 5G..."
+    # from being rejected before metadata lookup.
+    # --------------------------------------------------------
+
+    pricehistory = search_pricehistory(
+        product_title
+    )
+
+    historical_low = None
+    ph_category = ""
+    ph_title = ""
+    ph_url = ""
+
+    if pricehistory:
+
+        historical_low = pricehistory.get(
+            "historical_low"
+        )
+
+        ph_category = pricehistory.get(
+            "category",
+            ""
+        )
+
+        ph_title = pricehistory.get(
+            "title",
+            ""
+        )
+
+        ph_url = pricehistory.get(
+            "url",
+            ""
+        )
+
+    # --------------------------------------------------------
+    # SECOND classification using PriceHistory metadata
+    # --------------------------------------------------------
+
+    if not category_result["accepted"]:
+
+        metadata_text = " ".join(
+            x for x in [
+                product_title,
+                ph_title,
+                ph_category
+            ]
+            if x
+        )
+
+        category_result = classify_product(
+            metadata_text
+        )
+
+    # --------------------------------------------------------
+    # If still not classified
+    # --------------------------------------------------------
+
+    if not category_result["accepted"]:
+
+        return {
+            "status": "CATEGORY_REJECT",
+            "historical_low": historical_low,
+            "reason": category_result["reason"],
+            "category": None,
+            "source": source,
+            "url": (
+                resolved_url
+                or ph_url
+            ),
+        }
+
+    # --------------------------------------------------------
+    # Historical low unavailable
+    # --------------------------------------------------------
 
     if historical_low is None:
 
         return {
             "status": "NOT_LOW",
-            "reason":
-                "Historical low could not be parsed",
+            "historical_low": None,
+            "reason": (
+                "Historical low price "
+                "could not be determined"
+            ),
+            "category": category_result.get(
+                "category"
+            ),
+            "source": source,
+            "url": (
+                resolved_url
+                or ph_url
+            ),
         }
 
-    # ========================================================
-    # EQUAL ALSO COUNTS
-    # ========================================================
+    # --------------------------------------------------------
+    # Suspicious historical low
+    # --------------------------------------------------------
 
-    if current_price <= historical_low:
+    if suspicious_historical_low(
+        current_price,
+        historical_low
+    ):
 
         return {
-            "status": "NEW_LOW",
+            "status": "SUSPICIOUS_HISTORY",
+            "historical_low": historical_low,
             "reason": (
-                f"Current price "
-                f"₹{current_price:,.0f} "
-                f"is at/below historical low "
-                f"₹{historical_low:,.0f}"
+                "Historical low appears "
+                "unrealistically low compared "
+                "with current price"
             ),
-            "historical_low":
-                historical_low,
+            "category": category_result.get(
+                "category"
+            ),
+            "source": source,
+            "url": (
+                resolved_url
+                or ph_url
+            ),
         }
 
-    difference = (
-        current_price
-        -
+    # --------------------------------------------------------
+    # Compare price
+    # --------------------------------------------------------
+
+    status, reason = compare_price(
+        current_price,
         historical_low
     )
 
-    allowed_difference = max(
-        historical_low
-        *
-        NEAR_LOW_PERCENT,
-
-        NEAR_LOW_MAX_RUPEES
-    )
-
-    if difference <= allowed_difference:
-
-        return {
-            "status": "NEAR_LOW",
-            "reason": (
-                f"Current price "
-                f"₹{current_price:,.0f} "
-                f"is within "
-                f"₹{allowed_difference:,.0f} "
-                f"of historical low "
-                f"₹{historical_low:,.0f}"
-            ),
-            "historical_low":
-                historical_low,
-        }
+    # --------------------------------------------------------
+    # Final result
+    # --------------------------------------------------------
 
     return {
-        "status": "NOT_LOW",
-        "reason": (
-            f"Current price "
-            f"₹{current_price:,.0f} "
-            f"is ₹{difference:,.0f} "
-            f"above historical low "
-            f"₹{historical_low:,.0f}"
+        "status": status,
+        "historical_low": historical_low,
+        "reason": reason,
+        "category": category_result.get(
+            "category"
         ),
-        "historical_low":
-            historical_low,
+        "source": source,
+        "url": (
+            resolved_url
+            or ph_url
+        ),
     }
-
-
-# ============================================================
-# MAIN VALIDATOR
-# ============================================================
-
-def validate_deal(
-    title,
-    price,
-    url=None,
-    source=None
-):
-
-    try:
-
-        # ----------------------------------------------------
-        # TITLE
-        # ----------------------------------------------------
-
-        if not title:
-
-            return {
-                "status":
-                    "CATEGORY_REJECT",
-
-                "reason":
-                    "Product title missing",
-
-                "historical_low":
-                    None,
-
-                "source":
-                    source,
-            }
-
-        # ----------------------------------------------------
-        # PRICE
-        # ----------------------------------------------------
-
-        current_price = normalize_price(
-            price
-        )
-
-        if current_price is None:
-
-            return {
-                "status":
-                    "REJECT",
-
-                "reason":
-                    "Current price could not be parsed",
-
-                "historical_low":
-                    None,
-
-                "source":
-                    source,
-            }
-
-        # ----------------------------------------------------
-        # MINIMUM PRICE
-        # ----------------------------------------------------
-
-        if current_price <= MIN_PRICE:
-
-            return {
-                "status":
-                    "REJECT",
-
-                "reason": (
-                    f"Price "
-                    f"₹{current_price:,.0f} "
-                    f"is not above minimum "
-                    f"₹{MIN_PRICE:,.0f}"
-                ),
-
-                "historical_low":
-                    None,
-
-                "source":
-                    source,
-
-                "price":
-                    current_price,
-            }
-
-        # ----------------------------------------------------
-        # INITIAL CATEGORY CHECK
-        # ----------------------------------------------------
-
-        category_result = classify_product(
-            title
-        )
-
-        # ----------------------------------------------------
-        # PRICEHISTORY LOOKUP
-        # ----------------------------------------------------
-
-        history = pricehistory_lookup(
-            title=title,
-            deal_url=url
-        )
-
-        # ----------------------------------------------------
-        # IF CATEGORY IS UNKNOWN:
-        # Try PriceHistory page/category information
-        # before rejecting.
-        # ----------------------------------------------------
-
-        if not category_result["accepted"]:
-
-            if history:
-
-                extra_text = " ".join(
-                    [
-                        history.get(
-                            "matched_title",
-                            ""
-                        ),
-
-                        history.get(
-                            "category_text",
-                            ""
-                        ),
-
-                        history.get(
-                            "page_title",
-                            ""
-                        ),
-                    ]
-                )
-
-                category_result = classify_product(
-                    title,
-                    extra_text
-                )
-
-        # ----------------------------------------------------
-        # CATEGORY FINAL CHECK
-        # ----------------------------------------------------
-
-        if not category_result["accepted"]:
-
-            return {
-                "status":
-                    "CATEGORY_REJECT",
-
-                "reason":
-                    category_result["reason"],
-
-                "historical_low":
-                    None,
-
-                "source":
-                    source,
-
-                "price":
-                    current_price,
-            }
-
-        matched_category = (
-            category_result[
-                "matched_category"
-            ]
-        )
-
-        # ----------------------------------------------------
-        # PRICEHISTORY NOT FOUND
-        # ----------------------------------------------------
-
-        if not history:
-
-            return {
-                "status":
-                    "NOT_LOW",
-
-                "reason":
-                    (
-                        "PriceHistory product "
-                        "match/history could not "
-                        "be verified"
-                    ),
-
-                "historical_low":
-                    None,
-
-                "source":
-                    source,
-
-                "price":
-                    current_price,
-
-                "category":
-                    matched_category,
-            }
-
-        # ----------------------------------------------------
-        # HISTORICAL LOW
-        # ----------------------------------------------------
-
-        historical_low = normalize_price(
-            history.get(
-                "historical_low"
-            )
-        )
-
-        if historical_low is None:
-
-            return {
-                "status":
-                    "NOT_LOW",
-
-                "reason":
-                    (
-                        "PriceHistory returned "
-                        "no valid historical low"
-                    ),
-
-                "historical_low":
-                    None,
-
-                "source":
-                    source,
-
-                "price":
-                    current_price,
-
-                "category":
-                    matched_category,
-            }
-
-        # ----------------------------------------------------
-        # SUSPICIOUS HISTORY
-        # ----------------------------------------------------
-
-        if suspicious_historical_low(
-            current_price,
-            historical_low
-        ):
-
-            return {
-                "status":
-                    "NOT_LOW",
-
-                "reason": (
-                    "Suspicious PriceHistory "
-                    f"low ₹{historical_low:,.0f}; "
-                    "possible bad/mismatched history"
-                ),
-
-                "historical_low":
-                    historical_low,
-
-                "source":
-                    source,
-
-                "price":
-                    current_price,
-
-                "category":
-                    matched_category,
-
-                "pricehistory_url":
-                    history.get(
-                        "pricehistory_url"
-                    ),
-            }
-
-        # ----------------------------------------------------
-        # PRICE COMPARISON
-        # ----------------------------------------------------
-
-        comparison = compare_price(
-            current_price,
-            historical_low
-        )
-
-        return {
-            "status":
-                comparison["status"],
-
-            "reason":
-                comparison.get(
-                    "reason"
-                ),
-
-            "source":
-                source,
-
-            "product":
-                title,
-
-            "price":
-                current_price,
-
-            "historical_low":
-                historical_low,
-
-            "category":
-                matched_category,
-
-            "pricehistory_url":
-                history.get(
-                    "pricehistory_url"
-                ),
-
-            "match_similarity":
-                history.get(
-                    "similarity"
-                ),
-        }
-
-    except Exception as e:
-
-        return {
-            "status":
-                "ERROR",
-
-            "reason":
-                f"Validator error: {e}",
-
-            "historical_low":
-                None,
-
-            "source":
-                source,
-        }
 
 
 # ============================================================
@@ -1531,66 +1301,34 @@ if __name__ == "__main__":
     )
 
     print(
-        "========== VALIDATOR TEST =========="
+        "========== VALIDATOR TEST ==========="
     )
-
-    print(
-        f"Version: 2.2"
-    )
-
-    print(
-        f"Category file: "
-        f"{CATEGORY_FILE}"
-    )
-
-    print(
-        f"Allowed categories loaded: "
-        f"{len(ALLOWED_CATEGORIES)}"
-    )
-
-    print(
-        f"Excluded categories loaded: "
-        f"{len(EXCLUDED_KEYWORDS)}"
-    )
-
-    print(
-        f"Minimum price: "
-        f"₹{MIN_PRICE}"
-    )
-
-    print(
-        "===================================="
-    )
-
-    # Generic test only.
-    # NO brand/model is required by the validator.
-    test_title = "Wireless Headphones"
 
     result = validate_deal(
-        title=test_title,
-        price=2499,
+        product_title="Wireless Headphones",
+        current_price=2499,
         url="",
         source="TEST"
     )
 
     print(
-        "STATUS:",
+        "status:",
         result.get("status")
     )
 
     print(
-        "HISTORICAL LOW:",
+        "historical_low:",
         result.get("historical_low")
     )
 
     print(
-        "REASON:",
-        result.get("reason")
+        "category:",
+        result.get("category")
     )
 
     print(
-        "CATEGORY:",
-        result.get("category")
+        "reason:",
+        result.get("reason")
     )
 
     print(
