@@ -7,30 +7,29 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import quote_plus
 
-from telethon import TelegramClient, events
-from telethon.sessions import StringSession
 from dotenv import load_dotenv
 
+from telethon import TelegramClient, events
+from telethon.sessions import StringSession
+
+
+# =========================================================
+# ENV
+# =========================================================
 
 load_dotenv()
 
-API_ID = int(os.getenv("TG_API_ID"))
-API_HASH = os.getenv("TG_API_HASH")
-SESSION = os.getenv("TG_SESSION")
+API_ID = int(os.getenv("TG_API_ID", "0"))
+API_HASH = os.getenv("TG_API_HASH", "").strip()
+SESSION = os.getenv("TG_SESSION", "").strip()
 
-SOURCE_CHANNELS = [
-    x.strip()
-    for x in os.getenv(
-        "SOURCE_CHANNEL",
-        "@lootdeals2005,@pricehistory,@lootersindia"
-    ).split(",")
-    if x.strip()
-]
+if not API_ID or not API_HASH or not SESSION:
+    raise RuntimeError("TG_API_ID / TG_API_HASH / TG_SESSION missing")
 
-PRIVATE_CHANNEL_NAMES = ["Offerzone 2.0"]
 
-STATE_FILE = "deal_state.json"
-
+# =========================================================
+# TELEGRAM CLIENT
+# =========================================================
 
 client = TelegramClient(
     StringSession(SESSION),
@@ -38,9 +37,233 @@ client = TelegramClient(
     API_HASH
 )
 
-MONITORED_CHAT_IDS = set()
-MONITORED_SOURCE_NAMES = {}
 
+# =========================================================
+# SETTINGS
+# =========================================================
+
+HEARTBEAT_SECONDS = 60
+DIALOG_REFRESH_SECONDS = 60
+
+STATE_FILE = "deal_state.json"
+
+MONITORED_CHAT_IDS = set()
+CHAT_NAMES = {}
+
+last_dialog_refresh = 0
+
+
+# =========================================================
+# TARGET PRODUCT TERMS
+# =========================================================
+
+IPHONE_TERMS = [
+    "iphone 11",
+    "iphone 12",
+    "iphone 13",
+    "iphone 14",
+    "iphone 15",
+    "iphone 16",
+    "iphone 17",
+]
+
+SAMSUNG_ULTRA_PATTERN = re.compile(
+    r"\bs\d{2}\s*ultra\b",
+    re.IGNORECASE
+)
+
+FURNITURE_TERMS = [
+    "sofa",
+    "couch",
+    "recliner",
+    "sectional",
+    "sofa set",
+
+    "bed",
+    "double bed",
+    "king bed",
+    "queen bed",
+
+    "wardrobe",
+    "almirah",
+
+    "dining table",
+    "dining chair",
+    "dining set",
+
+    "coffee table",
+    "side table",
+    "study table",
+    "office table",
+
+    "office chair",
+    "study chair",
+    "reclining chair",
+
+    "bookshelf",
+    "book shelf",
+
+    "shoe rack",
+    "shoe cabinet",
+
+    "tv unit",
+    "tv cabinet",
+    "tv stand",
+
+    "dresser",
+    "cabinet",
+    "drawer",
+    "chest",
+
+    "storage cabinet",
+    "storage furniture",
+]
+
+
+# =========================================================
+# ACCESSORY / JUNK REJECTION
+# =========================================================
+
+REJECT_TERMS = [
+    # phone accessories
+    "case",
+    "cover",
+    "mobile cover",
+    "phone cover",
+    "back cover",
+    "silicone case",
+
+    "screen protector",
+    "tempered glass",
+    "glass protector",
+    "back glass",
+
+    "screen guard",
+    "skin",
+    "skins",
+    "sleeve",
+
+    "charger",
+    "charging cable",
+    "usb cable",
+    "adapter",
+    "power adapter",
+
+    "holder",
+    "stand",
+    "mobile stand",
+    "phone stand",
+
+    "lens protector",
+    "camera protector",
+
+    "replacement",
+    "battery replacement",
+    "display replacement",
+    "screen replacement",
+
+    "earphone",
+    "earphones",
+    "airpods",
+    "airpod",
+
+    "watch",
+    "smartwatch",
+    "watch strap",
+    "strap",
+
+    # furniture unrelated / junk
+    "mattress",
+    "bedsheet",
+    "bed sheet",
+    "pillow",
+    "curtain",
+
+    "carpet",
+    "rug",
+    "mat",
+
+    "lamp",
+    "light",
+    "wall art",
+    "clock",
+
+    "cleaner",
+    "cleaning",
+    "polish",
+
+    "hinge",
+    "handle",
+    "knob",
+    "screw",
+    "bracket",
+
+    "laptop stand",
+    "monitor stand",
+    "tablet stand",
+
+    # orthopedic/support products
+    "ankle supporter",
+    "ankle support",
+    "knee supporter",
+    "knee support",
+    "wrist supporter",
+    "wrist support",
+    "back support",
+    "neck support",
+    "lumbar support",
+    "elbow support",
+    "brace",
+    "orthopedic",
+    "compression",
+    "cushion",
+]
+
+
+# =========================================================
+# LOOT / DEAL TERMS
+# =========================================================
+
+LOOT_TERMS = [
+    "price error",
+    "pricing error",
+    "price glitch",
+    "pricing glitch",
+
+    "glitch deal",
+    "glitch price",
+
+    "error price",
+    "error pricing",
+
+    "loot deal",
+    "loot",
+    "loot deal",
+
+    "crazy price",
+    "crazy deal",
+
+    "mistakenly priced",
+    "wrong price",
+
+    "lowest ever",
+    "all time low",
+    "all-time low",
+    "atl",
+
+    "historical low",
+    "historic low",
+    "new low",
+
+    "price drop",
+    "massive discount",
+    "huge discount",
+]
+
+
+# =========================================================
+# STATE
+# =========================================================
 
 def load_state():
     try:
@@ -59,209 +282,171 @@ def save_state():
             json.dump(
                 STATE,
                 f,
-                indent=2,
-                ensure_ascii=False
+                ensure_ascii=False,
+                indent=2
             )
     except Exception as e:
-        print("State save error:", e)
+        print(f"⚠️ State save error: {e}")
 
 
-ACCESSORY_TERMS = [
-    "cover", "case", "cable", "charger", "adapter",
-    "screen protector", "tempered glass", "back glass",
-    "screen guard", "screen film", "skin", "sleeve",
-    "holder", "mount", "lens protector", "camera protector",
-    "replacement", "battery replacement", "display replacement",
-    "screen replacement", "lcd", "strap", "earphone",
-    "earphones", "airpods", "galaxy buds", "watch", "smartwatch"
-]
-
-FURNITURE_TERMS = [
-    "sofa", "couch", "recliner", "sectional", "sofa set",
-    "bed", "king bed", "queen bed", "double bed",
-    "single bed", "bunk bed", "wardrobe", "almirah",
-    "dining table", "dining chair", "dining set",
-    "coffee table", "side table", "study table",
-    "office table", "desk", "office chair", "study chair",
-    "reclining chair", "bookshelf", "book shelf",
-    "shoe rack", "shoe cabinet", "tv unit", "tv cabinet",
-    "tv stand", "dresser", "cabinet", "drawer",
-    "chest of drawers", "storage cabinet", "furniture"
-]
-
-FURNITURE_REJECT_TERMS = [
-    "ankle supporter", "ankle support", "knee supporter",
-    "knee support", "wrist support", "back support",
-    "elbow support", "neck support", "lumbar support",
-    "brace", "orthopedic", "compression", "mattress",
-    "bedsheet", "bed sheet", "pillow", "cushion", "curtain",
-    "cleaner", "cleaning", "polish", "hinge", "handle",
-    "knob", "screw", "bracket", "lamp", "light", "decor",
-    "wall art", "clock", "carpet", "rug", "mat",
-    "laptop stand", "mobile stand", "phone stand",
-    "tablet stand", "monitor stand"
-]
-
-LOOT_TERMS = [
-    "price error", "pricing error", "price glitch",
-    "pricing glitch", "glitch deal", "glitch price",
-    "error price", "error pricing", "loot deal", "loot",
-    "crazy price", "crazy deal", "mistakenly priced",
-    "wrong price", "lowest ever", "all time low",
-    "all-time low", "atl", "historical low",
-    "historic low", "new low"
-]
-
-URL_REGEX = re.compile(
-    r"https?://[^\s<>\]\)]+",
-    re.IGNORECASE
-)
-
+# =========================================================
+# URL EXTRACTION
+# =========================================================
 
 def extract_urls(text):
     if not text:
         return []
 
-    result = []
+    urls = re.findall(
+        r"https?://[^\s<>\]\)]+",
+        text
+    )
 
-    for url in URL_REGEX.findall(text):
-        url = url.rstrip(".,;:!?)]}")
+    cleaned = []
 
-        if url not in result:
-            result.append(url)
+    for url in urls:
+        url = url.rstrip(".,;:!?)]}>")
 
-    return result
+        if url not in cleaned:
+            cleaned.append(url)
+
+    return cleaned
 
 
-def extract_prices(text):
+# =========================================================
+# PRICE EXTRACTION
+# =========================================================
+
+def extract_price(text):
     if not text:
-        return []
-
-    prices = []
+        return None
 
     patterns = [
-        r"(?:₹|Rs\.?|INR)\s*([0-9][0-9,]*(?:\.[0-9]+)?)",
-        r"([0-9][0-9,]*(?:\.[0-9]+)?)\s*(?:₹|Rs\.?|INR)"
+        r"(?:₹|rs\.?|inr)\s*([0-9][0-9,]*(?:\.[0-9]+)?)",
+        r"([0-9][0-9,]*(?:\.[0-9]+)?)\s*(?:₹|rs\.?|inr)",
     ]
 
+    values = []
+
     for pattern in patterns:
-        for value in re.findall(
+        matches = re.findall(
             pattern,
             text,
             re.IGNORECASE
-        ):
+        )
+
+        for value in matches:
             try:
-                prices.append(
-                    float(value.replace(",", ""))
-                )
+                number = float(value.replace(",", ""))
+
+                if 100 <= number <= 10000000:
+                    values.append(number)
+
             except Exception:
                 pass
 
-    return list(dict.fromkeys(prices))
+    if not values:
+        return None
+
+    return min(values)
 
 
-def get_price(text):
-    prices = extract_prices(text)
-    return min(prices) if prices else None
-
-
-def contains_accessory(text):
-    return any(
-        term in text
-        for term in ACCESSORY_TERMS
-    )
-
+# =========================================================
+# PRODUCT DETECTION
+# =========================================================
 
 def is_iphone(text):
-    text = text.lower()
+    text_lower = text.lower()
 
-    if contains_accessory(text):
-        return False
+    for model in IPHONE_TERMS:
+        if model in text_lower:
+            return True
 
-    return bool(
-        re.search(
-            r"\biphone\s*(11|12|13|14|15|16|17)\b",
-            text
-        )
-    )
+    return False
 
 
 def is_samsung_ultra(text):
-    text = text.lower()
-
-    if contains_accessory(text):
-        return False
-
-    patterns = [
-        r"\bs\d{2}\s*ultra\b",
-        r"\bsamsung\s+s\d{2}\s*ultra\b",
-        r"\bgalaxy\s+s\d{2}\s*ultra\b"
-    ]
-
-    return any(
-        re.search(pattern, text)
-        for pattern in patterns
+    return bool(
+        SAMSUNG_ULTRA_PATTERN.search(text)
     )
 
 
 def is_furniture(text):
-    text = text.lower()
+    text_lower = text.lower()
 
-    if any(
-        term in text
-        for term in FURNITURE_REJECT_TERMS
-    ):
+    for term in FURNITURE_TERMS:
+        if term in text_lower:
+            return True
+
+    return False
+
+
+def is_rejected_product(text):
+    text_lower = text.lower()
+
+    for term in REJECT_TERMS:
+        if term in text_lower:
+            return True
+
+    return False
+
+
+def is_target_product(text):
+    return (
+        is_iphone(text)
+        or is_samsung_ultra(text)
+        or is_furniture(text)
+    )
+
+
+# =========================================================
+# LOOT DETECTION
+# =========================================================
+
+def has_loot_keyword(text):
+    text_lower = text.lower()
+
+    for term in LOOT_TERMS:
+        if term in text_lower:
+            return True
+
+    return False
+
+
+# =========================================================
+# MESSAGE VALIDATION
+# =========================================================
+
+def validate_message(text, urls):
+    if not text:
         return False
 
-    return any(
-        term in text
-        for term in FURNITURE_TERMS
-    )
+    if not urls:
+        return False
+
+    # obvious junk/accessories
+    if is_rejected_product(text):
+        return False
+
+    target = is_target_product(text)
+    loot = has_loot_keyword(text)
+
+    # Target products can pass even without explicit "loot"
+    if target:
+        return True
+
+    # Other products need explicit loot/deal language
+    if loot:
+        return True
+
+    return False
 
 
-def get_product_type(text):
-    if is_iphone(text):
-        return "iPhone"
+# =========================================================
+# PRICEHISTORY
+# =========================================================
 
-    if is_samsung_ultra(text):
-        return "Samsung Ultra"
-
-    if is_furniture(text):
-        return "Furniture"
-
-    return None
-
-
-def is_loot_message(text):
-    text = text.lower()
-
-    return any(
-        term in text
-        for term in LOOT_TERMS
-    )
-
-
-def parse_money(value):
-    if value is None:
-        return None
-
-    match = re.search(
-        r"([0-9][0-9,]*(?:\.[0-9]+)?)",
-        str(value)
-    )
-
-    if not match:
-        return None
-
-    try:
-        return float(
-            match.group(1).replace(",", "")
-        )
-    except Exception:
-        return None
-
-
-def check_pricehistory(product_url):
+def get_pricehistory_data(product_url):
     try:
         search_url = (
             "https://pricehistory.app/?search="
@@ -270,438 +455,417 @@ def check_pricehistory(product_url):
 
         response = requests.get(
             search_url,
+            timeout=15,
             headers={
                 "User-Agent": (
                     "Mozilla/5.0 "
                     "(Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) "
-                    "Chrome/140.0 Safari/537.36"
+                    "Chrome/140 Safari/537.36"
                 )
-            },
-            timeout=15
+            }
         )
 
         if response.status_code != 200:
-            return {"status": "unknown"}
+            return None, None
 
         soup = BeautifulSoup(
             response.text,
             "html.parser"
         )
 
-        page_text = soup.get_text(
+        text = soup.get_text(
             " ",
             strip=True
         )
 
-        lowest_match = re.search(
-            r"Lowest(?:\s*Price)?\s*[:₹RsINR]*\s*([0-9][0-9,]*)",
-            page_text,
+        lowest = None
+        current = None
+
+        low_match = re.search(
+            r"Lowest\s*(?:Price)?\s*₹?\s*([0-9,]+)",
+            text,
             re.IGNORECASE
         )
 
         current_match = re.search(
-            r"Current Price\s*[:₹RsINR]*\s*([0-9][0-9,]*)",
-            page_text,
+            r"Current\s*Price\s*₹?\s*([0-9,]+)",
+            text,
             re.IGNORECASE
         )
 
-        lowest = (
-            parse_money(lowest_match.group(1))
-            if lowest_match
-            else None
-        )
+        if low_match:
+            lowest = float(
+                low_match.group(1).replace(",", "")
+            )
 
-        current = (
-            parse_money(current_match.group(1))
-            if current_match
-            else None
-        )
+        if current_match:
+            current = float(
+                current_match.group(1).replace(",", "")
+            )
 
-        if lowest is None:
-            return {"status": "unknown"}
+        return lowest, current
 
-        return {
-            "status": "ok",
-            "lowest": lowest,
-            "current": current
-        }
-
-    except Exception as e:
-        print("PriceHistory error:", e)
-        return {"status": "unknown"}
+    except Exception:
+        return None, None
 
 
-def validate_price(telegram_price, history):
-    if telegram_price is None:
-        return "unknown"
+# =========================================================
+# PRICE VALIDATION
+# =========================================================
 
-    if history.get("status") != "ok":
-        return "unknown"
+def validate_price(price, historical_low):
+    if price is None:
+        return "UNKNOWN"
 
-    lowest = history.get("lowest")
+    if historical_low is None:
+        return "UNKNOWN"
 
-    if lowest is None:
-        return "unknown"
+    # At or below historical low
+    if price <= historical_low:
+        return "VALID"
 
-    if telegram_price <= lowest:
-        return "accept"
+    # Within 2% of historical low
+    if price <= historical_low * 1.02:
+        return "VALID"
 
-    if telegram_price <= lowest * 1.02:
-        return "accept"
-
-    return "reject"
-
-
-def normalize_url(url):
-    url = url.lower().strip()
-    url = url.replace("https://", "")
-    url = url.replace("http://", "")
-    url = url.split("?")[0]
-
-    return url.rstrip("/")
+    return "REJECT"
 
 
-def already_seen(url, price):
-    key = normalize_url(url)
-    old = STATE.get(key)
+# =========================================================
+# DUPLICATE CHECK
+# =========================================================
 
-    if not old:
+def already_sent(url, price):
+    record = STATE.get(url)
+
+    if not record:
         return False
 
-    old_price = old.get("price")
+    old_price = record.get("price")
 
     if old_price is None:
-        return False
+        return True
 
     if price is None:
         return True
 
-    return float(price) >= float(old_price)
+    # Don't send same/higher price again
+    if price >= old_price:
+        return True
+
+    return False
 
 
-def remember_deal(url, price, product_type):
-    key = normalize_url(url)
-    old = STATE.get(key)
-
-    if old:
-        old_price = old.get("price")
-
-        if (
-            price is not None
-            and (
-                old_price is None
-                or price < old_price
-            )
-        ):
-            old["price"] = price
-
-        save_state()
-        return
-
-    STATE[key] = {
-        "price": price,
-        "product_type": product_type
+def mark_sent(url, price):
+    STATE[url] = {
+        "price": price
     }
 
     save_state()
 
 
-async def resolve_sources():
-    MONITORED_CHAT_IDS.clear()
-    MONITORED_SOURCE_NAMES.clear()
+# =========================================================
+# DEAL ALERT
+# =========================================================
 
-    print("Resolving Telegram sources...")
+async def send_deal(
+    source_name,
+    text,
+    url,
+    price,
+    historical_low,
+    validation
+):
+
+    alert = (
+        "🔥 LOOT DEAL FOUND\n\n"
+        f"📢 Source: {source_name}\n"
+        f"💰 Price: ₹{price:,.0f}\n"
+    )
+
+    if historical_low is not None:
+        alert += (
+            f"📉 Historical Low: "
+            f"₹{historical_low:,.0f}\n"
+        )
+
+    alert += (
+        f"✅ Validation: {validation}\n\n"
+        f"🔗 {url}\n\n"
+        f"📝 {text[:1000]}"
+    )
 
     try:
-        dialogs = await client.get_dialogs()
+        await client.send_message(
+            "me",
+            alert,
+            link_preview=False
+        )
 
         print(
-            f"Telegram dialogs loaded: {len(dialogs)}"
+            f"🚨 DEAL SENT | {source_name} | "
+            f"₹{price if price else 'UNKNOWN'}"
         )
 
     except Exception as e:
-        print(
-            "Could not load Telegram dialogs:",
-            e
-        )
-        dialogs = []
-
-    for source in SOURCE_CHANNELS:
-        try:
-            entity = await client.get_entity(source)
-
-            chat_id = int(entity.id)
-
-            MONITORED_CHAT_IDS.add(chat_id)
-
-            username = getattr(
-                entity,
-                "username",
-                None
-            )
-
-            title = getattr(
-                entity,
-                "title",
-                None
-            )
-
-            display_name = (
-                f"@{username}"
-                if username
-                else title or source
-            )
-
-            MONITORED_SOURCE_NAMES[
-                chat_id
-            ] = display_name
-
-            print(
-                f"FOUND: {display_name} | ID={chat_id}"
-            )
-
-        except Exception as e:
-            print(
-                f"NOT FOUND: {source} | {e}"
-            )
-
-    for wanted_name in PRIVATE_CHANNEL_NAMES:
-        found = False
-
-        for dialog in dialogs:
-            title = (
-                getattr(
-                    dialog,
-                    "title",
-                    ""
-                ) or ""
-            ).strip()
-
-            if title.lower() == wanted_name.lower():
-                entity = dialog.entity
-                chat_id = int(entity.id)
-
-                MONITORED_CHAT_IDS.add(chat_id)
-
-                MONITORED_SOURCE_NAMES[
-                    chat_id
-                ] = title
-
-                print(
-                    f"FOUND PRIVATE: "
-                    f"{title} | ID={chat_id}"
-                )
-
-                found = True
-                break
-
-        if not found:
-            print(
-                f"PRIVATE SOURCE NOT FOUND: "
-                f"{wanted_name}"
-            )
-
-    print(
-        f"Total sources: "
-        f"{len(MONITORED_CHAT_IDS)}"
-    )
+        print(f"❌ Alert error: {e}")
 
 
-async def process_message(event):
-    chat_id = event.chat_id
+# =========================================================
+# PROCESS MESSAGE
+# =========================================================
+
+async def process_message(message):
+
+    chat_id = message.chat_id
 
     if chat_id not in MONITORED_CHAT_IDS:
         return
 
-    text = event.raw_text or ""
+    text = message.message or ""
 
     if not text.strip():
         return
 
-    source_name = MONITORED_SOURCE_NAMES.get(
+    urls = extract_urls(text)
+
+    if not urls:
+        return
+
+    if not validate_message(text, urls):
+        return
+
+    source_name = CHAT_NAMES.get(
         chat_id,
         str(chat_id)
     )
 
-    print()
-    print("MESSAGE RECEIVED")
-    print(f"Source: {source_name}")
-    print(f"Message ID: {event.id}")
-    print(
-        f"Text: {text.replace(chr(10), ' ')[:300]}"
-    )
+    price = extract_price(text)
 
-    product_type = get_product_type(text)
-    loot_message = is_loot_message(text)
-    urls = extract_urls(text)
-
-    if not product_type and not loot_message:
-        print("Ignored: no product/loot signal")
-        return
-
-    if not urls:
-        print("Candidate found but no URL")
-        return
-
-    telegram_price = get_price(text)
-
+    # Check every URL in the message
     for url in urls:
-        print(f"Checking: {url}")
 
-        history = check_pricehistory(url)
+        if already_sent(url, price):
+            continue
+
+        historical_low = None
+        current_price = None
+
+        # PriceHistory best-effort validation
+        if price is not None:
+            (
+                historical_low,
+                current_price
+            ) = await asyncio.to_thread(
+                get_pricehistory_data,
+                url
+            )
 
         validation = validate_price(
-            telegram_price,
-            history
+            price,
+            historical_low
         )
 
-        if validation == "reject":
+        # If history is unavailable, don't
+        # automatically kill a genuine target deal.
+        if validation == "REJECT":
             print(
-                "Rejected: above historical low"
+                f"⛔ Rejected price | "
+                f"{source_name} | {url}"
             )
             continue
 
-        if already_seen(
+        await send_deal(
+            source_name,
+            text,
             url,
-            telegram_price
-        ):
-            print(
-                "Ignored: duplicate/same price"
-            )
-            continue
+            price,
+            historical_low,
+            validation
+        )
 
-        remember_deal(
+        mark_sent(
             url,
-            telegram_price,
-            product_type
+            price
         )
 
-        title = product_type or "Loot Deal"
 
-        price_text = (
-            f"₹{telegram_price:,.0f}"
-            if telegram_price is not None
-            else "Not detected"
-        )
+# =========================================================
+# DISCOVER ALL CHANNELS
+# =========================================================
 
-        if history.get("status") == "ok":
-            lowest = history.get("lowest")
+async def discover_channels():
 
-            history_text = (
-                f"₹{lowest:,.0f}"
-                if lowest is not None
-                else "Unknown"
+    global MONITORED_CHAT_IDS
+    global CHAT_NAMES
+
+    try:
+        dialogs = await client.get_dialogs()
+
+        new_ids = set()
+        new_names = {}
+
+        for dialog in dialogs:
+
+            entity = dialog.entity
+
+            # Only BROADCAST CHANNELS.
+            # Groups and personal chats are ignored.
+            if not getattr(entity, "broadcast", False):
+                continue
+
+            chat_id = dialog.id
+            title = (
+                getattr(entity, "title", None)
+                or dialog.name
+                or str(chat_id)
             )
-        else:
-            history_text = "Unavailable"
 
-        alert = (
-            "🚨 LOOT ALERT\n\n"
-            f"📦 Type: {title}\n"
-            f"💰 Price: {price_text}\n"
-            f"📉 Historical Low: {history_text}\n"
-            f"📡 Source: {source_name}\n\n"
-            f"🔗 {url}\n\n"
-            f"🆔 Message: {event.id}"
+            new_ids.add(chat_id)
+            new_names[chat_id] = title
+
+        added = new_ids - MONITORED_CHAT_IDS
+        removed = MONITORED_CHAT_IDS - new_ids
+
+        MONITORED_CHAT_IDS = new_ids
+        CHAT_NAMES = new_names
+
+        if added:
+            for chat_id in added:
+                print(
+                    f"➕ NEW CHANNEL: "
+                    f"{CHAT_NAMES.get(chat_id, chat_id)}"
+                )
+
+        if removed:
+            for chat_id in removed:
+                print(
+                    f"➖ CHANNEL REMOVED: "
+                    f"{chat_id}"
+                )
+
+        print(
+            f"📡 Channels monitored: "
+            f"{len(MONITORED_CHAT_IDS)}"
         )
 
-        print()
-        print(alert)
-        print()
+        return True
+
+    except Exception as e:
+        print(
+            f"❌ Channel discovery error: {e}"
+        )
+        return False
+
+
+# =========================================================
+# NEW MESSAGE
+# =========================================================
+
+@client.on(events.NewMessage)
+async def new_message_handler(event):
+
+    try:
+        await process_message(
+            event.message
+        )
+
+    except Exception as e:
+        print(
+            f"❌ Message processing error: {e}"
+        )
+
+
+# =========================================================
+# EDITED MESSAGE
+# =========================================================
+
+@client.on(events.MessageEdited)
+async def edited_message_handler(event):
+
+    try:
+        await process_message(
+            event.message
+        )
+
+    except Exception as e:
+        print(
+            f"❌ Edited message error: {e}"
+        )
+
+
+# =========================================================
+# HEARTBEAT
+# =========================================================
+
+async def heartbeat():
+
+    global last_dialog_refresh
+
+    while True:
 
         try:
-            await client.send_message(
-                "me",
-                alert,
-                link_preview=False
-            )
+            now = asyncio.get_running_loop().time()
+
+            # Refresh channel list every minute
+            if (
+                now - last_dialog_refresh
+                >= DIALOG_REFRESH_SECONDS
+            ):
+                await discover_channels()
+                last_dialog_refresh = now
 
             print(
-                "Alert sent to Saved Messages"
+                f"❤️ Listening OK | "
+                f"{len(MONITORED_CHAT_IDS)} channels active"
             )
 
         except Exception as e:
             print(
-                "Alert send error:",
-                e
+                f"⚠️ Heartbeat error: {e}"
             )
 
-
-@client.on(events.NewMessage)
-async def new_message_handler(event):
-    try:
-        if event.chat_id not in MONITORED_CHAT_IDS:
-            return
-
-        await process_message(event)
-
-    except Exception as e:
-        print(
-            "NewMessage error:",
-            e
+        await asyncio.sleep(
+            HEARTBEAT_SECONDS
         )
 
 
-@client.on(events.MessageEdited)
-async def edited_message_handler(event):
-    try:
-        if event.chat_id not in MONITORED_CHAT_IDS:
-            return
-
-        print("MESSAGE EDITED")
-
-        await process_message(event)
-
-    except Exception as e:
-        print(
-            "MessageEdited error:",
-            e
-        )
-
+# =========================================================
+# MAIN
+# =========================================================
 
 async def main():
-    print("Starting Loot Hunter...")
+
+    print("🚀 Starting Loot Hunter...")
 
     await client.start()
 
     me = await client.get_me()
 
-    print("Telegram connected")
     print(
-        f"Logged in as: "
-        f"{getattr(me, 'first_name', '')}"
+        f"✅ Telegram connected as: "
+        f"{getattr(me, 'first_name', 'User')}"
     )
 
-    await resolve_sources()
-
-    if not MONITORED_CHAT_IDS:
-        print(
-            "ERROR: No monitored sources found."
-        )
-        return
+    # Initial discovery
+    await discover_channels()
 
     print(
-        "Listening for new messages..."
+        "👀 Listening to all joined channels..."
     )
 
-    print(
-        "Monitoring edited messages..."
+    # Heartbeat background task
+    asyncio.create_task(
+        heartbeat()
     )
 
     await client.run_until_disconnected()
 
 
+# =========================================================
+# RUN
+# =========================================================
+
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-
-    except KeyboardInterrupt:
-        print("Loot Hunter stopped.")
-
-    except Exception as e:
-        print(
-            "Fatal error:",
-            e
-        )
+    asyncio.run(main())
