@@ -1,5 +1,5 @@
 # deal_validator.py
-# VERSION: 2.9
+# VERSION: 3.0
 
 import re
 import requests
@@ -8,12 +8,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import quote, urljoin
 
 
-VERSION = "2.9"
-
-
-# ============================================================
-# CONFIG
-# ============================================================
+VERSION = "3.0"
 
 MIN_PRICE = 1000
 NEAR_LOW_PERCENT = 0.03
@@ -26,256 +21,7 @@ HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/140.0 Safari/537.36"
     ),
-    "Accept-Language": "en-IN,en;q=0.9",
 }
-
-
-# ============================================================
-# CATEGORIES
-# ============================================================
-
-ALLOWED_CATEGORIES = [
-    "Smartphones",
-    "Mobile Phones",
-    "Laptops",
-    "MacBooks",
-    "Tablets",
-    "iPads",
-    "Desktop Computers",
-    "Monitors",
-    "TVs",
-    "Smart TVs",
-    "Projectors",
-    "Cameras",
-    "Camera Lenses",
-    "Gaming Consoles",
-    "Graphics Cards",
-    "GPU",
-    "Processors",
-    "CPU",
-    "Motherboards",
-    "RAM",
-    "SSD",
-    "HDD",
-    "NAS",
-    "Printers",
-    "Scanners",
-    "Routers",
-    "Wi-Fi Devices",
-    "Networking Equipment",
-    "Keyboards",
-    "Mice",
-    "Webcams",
-
-    "Headphones",
-    "Earphones",
-    "TWS Earbuds",
-    "Bluetooth Speakers",
-    "Home Audio Systems",
-    "Soundbars",
-    "Amplifiers",
-    "Microphones",
-    "Audio Equipment",
-
-    "Air Conditioners",
-    "Refrigerators",
-    "Washing Machines",
-    "Dishwashers",
-    "Microwave Ovens",
-    "OTG Ovens",
-    "Air Purifiers",
-    "Vacuum Cleaners",
-    "Water Purifiers",
-    "Fans",
-    "Room Heaters",
-    "Kitchen Appliances",
-    "Coffee Machines",
-    "Electric Kettles",
-    "Induction Cooktops",
-
-    "Smart Home Devices",
-    "Smart Lighting",
-    "Smart Switches",
-    "Smart Plugs",
-    "Security Cameras",
-    "Smart Doorbells",
-    "Home Automation Devices",
-
-    "Sofas",
-    "Beds",
-    "Mattresses",
-    "Office Chairs",
-    "Gaming Chairs",
-    "Recliners",
-    "Study Tables",
-    "Office Tables",
-    "Dining Tables",
-    "Dining Chairs",
-    "Wardrobes",
-    "Cabinets",
-    "Bookshelves",
-    "TV Units",
-    "Shoe Racks",
-    "Coffee Tables",
-    "Side Tables",
-    "Storage Furniture",
-
-    "Running Shoes",
-    "Sports Shoes",
-    "Football Shoes",
-    "Cricket Bats",
-    "Cricket Equipment",
-    "Badminton Rackets",
-    "Badminton Equipment",
-    "Tennis Equipment",
-    "Basketball Equipment",
-    "Sports Bags",
-    "Gym Equipment",
-    "Dumbbells",
-    "Barbells",
-    "Weight Plates",
-    "Treadmills",
-    "Exercise Bikes",
-    "Cross Trainers",
-    "Yoga Equipment",
-    "Fitness Equipment",
-    "Cycling Equipment",
-    "Sports Accessories",
-
-    "Car Accessories",
-    "Bike Accessories",
-    "Car Electronics",
-    "Bike Electronics",
-    "Dashcams",
-    "Car Audio",
-    "Tyres",
-    "Car Care Equipment",
-    "Bike Care Equipment",
-    "Automotive Tools",
-    "Automotive Equipment",
-
-    "Power Tools",
-    "Drills",
-    "Grinders",
-    "Screwdriver Sets",
-    "Tool Kits",
-    "Hand Tools",
-    "Measuring Tools",
-    "Workshop Equipment",
-    "Hardware Equipment",
-    "Welding Equipment",
-    "Professional Tools",
-
-    "Trolley Bags",
-    "Suitcases",
-    "Backpacks",
-    "Duffle Bags",
-    "Travel Bags",
-    "Travel Gear",
-    "Travel Accessories",
-
-    "Tents",
-    "Camping Gear",
-    "Trekking Equipment",
-    "Hiking Equipment",
-    "Outdoor Furniture",
-    "Outdoor Equipment",
-
-    "Home Utility",
-    "Home Organization",
-    "Storage Solutions",
-    "Cleaning Equipment",
-    "Kitchen Storage",
-    "Bathroom Utility",
-    "Dining & Serving",
-    "Home Improvement Equipment",
-
-    "Premium Toys",
-    "Building Sets",
-    "Construction Sets",
-    "Educational Toys",
-    "Kids Ride-ons",
-    "Kids Equipment",
-    "Learning Devices",
-
-    "Pet Beds",
-    "Pet Feeders",
-    "Pet Grooming Equipment",
-    "Pet Travel Equipment",
-    "Pet Accessories",
-
-    "Gardening Tools",
-    "Garden Equipment",
-    "Planters",
-    "Outdoor Storage",
-
-    "Books",
-    "Educational Equipment",
-    "Study Equipment",
-    "Educational Devices",
-
-    "Trimmers",
-    "Shavers",
-    "Hair Dryers",
-    "Hair Straighteners",
-    "Hair Styling Appliances",
-    "Electric Grooming Devices",
-    "Electric Personal Care Devices",
-
-    "Professional Equipment",
-    "Industrial Equipment",
-    "Commercial Equipment",
-    "Testing Equipment",
-]
-
-
-# ============================================================
-# EXCLUDED KEYWORDS
-# ============================================================
-
-EXCLUDED_KEYWORDS = [
-    "phone cover",
-    "phone case",
-    "mobile cover",
-    "mobile case",
-    "back cover",
-    "screen protector",
-    "tempered glass",
-    "charging cable",
-    "usb cable",
-    "data cable",
-    "aux cable",
-    "hdmi cable",
-    "charger",
-    "adapter",
-    "small watch",
-    "smart band",
-    "fitness band",
-    "jewellery",
-    "jewelry",
-    "clothing",
-    "clothes",
-    "fashion",
-    "saree",
-    "shirt",
-    "t shirt",
-    "jeans",
-    "trousers",
-    "dress",
-    "cosmetic",
-    "makeup",
-    "grocery",
-    "food",
-    "daily consumable",
-]
-
-
-# ============================================================
-# DEBUG
-# ============================================================
-
-def price_debug(message):
-    print(f"[PRICE DEBUG] {message}")
 
 
 # ============================================================
@@ -287,6 +33,7 @@ def normalize(text):
         return ""
 
     text = str(text).lower()
+
     text = text.replace("&", " and ")
     text = text.replace("/", " ")
     text = text.replace("-", " ")
@@ -295,62 +42,6 @@ def normalize(text):
     text = re.sub(r"\s+", " ", text)
 
     return text.strip()
-
-
-# ============================================================
-# CATEGORY MATCH
-# ============================================================
-
-def category_match(product_text, category):
-    product = normalize(product_text)
-    cat = normalize(category)
-
-    if not product or not cat:
-        return False
-
-    if cat in product:
-        return True
-
-    product_words = set(product.split())
-    category_words = set(cat.split())
-
-    if len(category_words) == 1:
-        return bool(product_words.intersection(category_words))
-
-    return category_words.issubset(product_words)
-
-
-# ============================================================
-# CLASSIFY PRODUCT
-# ============================================================
-
-def classify_product(title, extra_text=""):
-    combined = normalize(f"{title} {extra_text}")
-
-    for keyword in EXCLUDED_KEYWORDS:
-        if normalize(keyword) in combined:
-            return {
-                "matched": False,
-                "category": None,
-                "reason": f"Excluded product type: {keyword}",
-            }
-
-    for category in ALLOWED_CATEGORIES:
-        if category_match(combined, category):
-            return {
-                "matched": True,
-                "category": category,
-                "reason": f"Matched category: {category}",
-            }
-
-    return {
-        "matched": False,
-        "category": None,
-        "reason": (
-            "Product category is outside "
-            "configured deal categories"
-        ),
-    }
 
 
 # ============================================================
@@ -370,14 +61,14 @@ def clean_price(value):
         r"\bRs\.?\b",
         "",
         value,
-        flags=re.I,
+        flags=re.IGNORECASE,
     )
 
     value = re.sub(
         r"\bINR\b",
         "",
         value,
-        flags=re.I,
+        flags=re.IGNORECASE,
     )
 
     match = re.search(
@@ -389,13 +80,19 @@ def clean_price(value):
         return None
 
     try:
-        return float(match.group())
+        price = float(match.group())
+
+        if price <= 0:
+            return None
+
+        return price
+
     except Exception:
         return None
 
 
 # ============================================================
-# TEXT PRICE EXTRACTION
+# PRICE EXTRACTION
 # ============================================================
 
 def extract_price(text):
@@ -406,71 +103,78 @@ def extract_price(text):
 
     patterns = [
         (
-            "deal price",
             r"(?:deal\s*price|deal\s*at)"
             r"\s*[:\-@]?\s*"
             r"(?:₹|rs\.?|inr)?\s*"
-            r"([\d,]+(?:\.\d+)?)",
+            r"([\d,]+(?:\.\d+)?)"
         ),
+
         (
-            "offer price",
             r"(?:offer\s*price|offer)"
             r"\s*[:\-@]?\s*"
             r"(?:₹|rs\.?|inr)?\s*"
-            r"([\d,]+(?:\.\d+)?)",
+            r"([\d,]+(?:\.\d+)?)"
         ),
+
         (
-            "sale price",
             r"(?:sale\s*price)"
             r"\s*[:\-@]?\s*"
             r"(?:₹|rs\.?|inr)?\s*"
-            r"([\d,]+(?:\.\d+)?)",
+            r"([\d,]+(?:\.\d+)?)"
         ),
+
         (
-            "current price",
             r"(?:current\s*price)"
             r"\s*[:\-@]?\s*"
             r"(?:₹|rs\.?|inr)?\s*"
-            r"([\d,]+(?:\.\d+)?)",
+            r"([\d,]+(?:\.\d+)?)"
         ),
+
         (
-            "buy at",
             r"(?:buy\s*at|now\s*at)"
             r"\s*[:\-@]?\s*"
             r"(?:₹|rs\.?|inr)?\s*"
-            r"([\d,]+(?:\.\d+)?)",
+            r"([\d,]+(?:\.\d+)?)"
         ),
+
         (
-            "rupee",
-            r"(?:₹|rs\.?|inr)\s*"
-            r"([\d,]+(?:\.\d+)?)",
+            r"@\s*"
+            r"(?:₹|rs\.?|inr)?\s*"
+            r"([\d,]+(?:\.\d+)?)"
         ),
+
         (
-            "slash price",
-            r"\b([\d,]+(?:\.\d+)?)\s*/-",
+            r"(?:₹|rs\.?|inr)"
+            r"\s*"
+            r"([\d,]+(?:\.\d+)?)"
         ),
+
         (
-            "only price",
-            r"\b([\d,]+(?:\.\d+)?)\s+only\b",
+            r"\b([\d,]+(?:\.\d+)?)\s*/-"
+        ),
+
+        (
+            r"\b([\d,]+(?:\.\d+)?)\s+only\b"
         ),
     ]
 
-    for name, pattern in patterns:
-        match = re.search(pattern, text, re.I)
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
+            text,
+            re.IGNORECASE,
+        )
 
         if not match:
             continue
 
-        price = clean_price(match.group(1))
+        price = clean_price(
+            match.group(1)
+        )
 
-        if price is not None and price > 0:
-            price_debug(
-                f"TEXT PRICE FOUND | pattern={name} | "
-                f"price=₹{price:.0f}"
-            )
+        if price is not None:
             return price
-
-    price_debug("TEXT PRICE NOT FOUND")
 
     return None
 
@@ -483,9 +187,8 @@ def resolve_url(url):
     if not url:
         return None
 
-    price_debug(f"RESOLVE URL START | {url}")
-
     try:
+
         response = requests.get(
             url,
             headers=HEADERS,
@@ -493,276 +196,416 @@ def resolve_url(url):
             allow_redirects=True,
         )
 
-        final_url = response.url or url
+        final_url = response.url
 
-        price_debug(
-            f"RESOLVE URL DONE | status={response.status_code} | "
-            f"final={final_url}"
-        )
+        if final_url:
+            return final_url
 
-        return final_url
+    except Exception:
+        pass
 
-    except Exception as e:
-        price_debug(
-            f"RESOLVE URL FAILED | "
-            f"{type(e).__name__}: {e}"
-        )
-        return url
+    return url
 
 
 # ============================================================
-# FETCH PRODUCT PAGE
+# STORE DETECTION
 # ============================================================
 
-def fetch_page(url):
+def detect_store(url):
     if not url:
-        price_debug("FETCH PAGE SKIPPED | URL empty")
         return None
 
-    price_debug(f"FETCH PAGE START | {url}")
+    url_lower = url.lower()
 
-    try:
-        response = requests.get(
-            url,
-            headers=HEADERS,
-            timeout=REQUEST_TIMEOUT,
-            allow_redirects=True,
-        )
-
-        price_debug(
-            f"FETCH PAGE RESPONSE | "
-            f"status={response.status_code} | "
-            f"content_length={len(response.text)}"
-        )
-
-        if response.status_code != 200:
-            price_debug("FETCH PAGE FAILED | non-200 response")
-            return None
-
-        return response.text
-
-    except Exception as e:
-        price_debug(
-            f"FETCH PAGE FAILED | "
-            f"{type(e).__name__}: {e}"
-        )
-        return None
-
-
-# ============================================================
-# PRODUCT PAGE PRICE EXTRACTION
-# ============================================================
-
-def extract_product_page_price(html):
-    if not html:
-        price_debug("PRODUCT PAGE PRICE | HTML EMPTY")
-        return None
-
-    price_debug(
-        f"PRODUCT PAGE PRICE SCAN START | "
-        f"html_length={len(html)}"
-    )
-
-    candidates = []
-
-    # --------------------------------------------------------
-    # JSON-LD / HTML price attributes
-    # --------------------------------------------------------
-
-    patterns = [
-        (
-            "priceCurrency/price",
-            r'"price"\s*:\s*"?(?:₹|Rs\.?|INR)?\s*'
-            r"([\d,]+(?:\.\d+)?)",
-        ),
-        (
-            "lowPrice",
-            r'"lowPrice"\s*:\s*"?(?:₹|Rs\.?|INR)?\s*'
-            r"([\d,]+(?:\.\d+)?)",
-        ),
-        (
-            "currentPrice",
-            r'"currentPrice"\s*:\s*"?(?:₹|Rs\.?|INR)?\s*'
-            r"([\d,]+(?:\.\d+)?)",
-        ),
-        (
-            "sellingPrice",
-            r'"sellingPrice"\s*:\s*"?(?:₹|Rs\.?|INR)?\s*'
-            r"([\d,]+(?:\.\d+)?)",
-        ),
-        (
-            "salePrice",
-            r'"salePrice"\s*:\s*"?(?:₹|Rs\.?|INR)?\s*'
-            r"([\d,]+(?:\.\d+)?)",
-        ),
-        (
-            "productPrice",
-            r'"productPrice"\s*:\s*"?(?:₹|Rs\.?|INR)?\s*'
-            r"([\d,]+(?:\.\d+)?)",
-        ),
-        (
-            "price attribute",
-            r'data-price=["\']([\d,]+(?:\.\d+)?)',
-        ),
-    ]
-
-    for name, pattern in patterns:
-        for match in re.finditer(
-            pattern,
-            html,
-            re.I,
-        ):
-            value = clean_price(match.group(1))
-
-            if value is not None and value > 0:
-                candidates.append(value)
-                price_debug(
-                    f"PAGE CANDIDATE | {name} | "
-                    f"₹{value:.0f}"
-                )
-
-    # --------------------------------------------------------
-    # Visible page text
-    # --------------------------------------------------------
-
-    soup = BeautifulSoup(
-        html,
-        "html.parser",
-    )
-
-    for tag in soup(
-        ["script", "style", "noscript"]
+    if (
+        "amazon.in" in url_lower
+        or "amazon.com" in url_lower
     ):
-        tag.extract()
+        return "amazon"
 
-    visible_text = soup.get_text(
-        " ",
-        strip=True,
-    )
+    if (
+        "flipkart.com" in url_lower
+    ):
+        return "flipkart"
 
-    visible_patterns = [
-        (
-            "visible deal price",
-            r"(?:deal\s*price|sale\s*price|"
-            r"current\s*price|selling\s*price)"
-            r"\s*[:\-]?\s*"
-            r"(?:₹|rs\.?|inr)?\s*"
-            r"([\d,]+(?:\.\d+)?)",
-        ),
-        (
-            "visible rupee",
-            r"(?:₹|rs\.?|inr)\s*"
-            r"([\d,]+(?:\.\d+)?)",
-        ),
-    ]
+    return None
 
-    for name, pattern in visible_patterns:
-        for match in re.finditer(
-            pattern,
-            visible_text,
-            re.I,
-        ):
-            value = clean_price(match.group(1))
 
-            if value is not None and value > 0:
-                candidates.append(value)
-                price_debug(
-                    f"VISIBLE CANDIDATE | {name} | "
-                    f"₹{value:.0f}"
-                )
+# ============================================================
+# PRODUCT ID EXTRACTION
+# ============================================================
 
-    # --------------------------------------------------------
-    # Filter unrealistic values
-    # --------------------------------------------------------
-
-    filtered = [
-        value
-        for value in candidates
-        if MIN_PRICE < value < 10000000
-    ]
-
-    if not filtered:
-        price_debug(
-            f"PRODUCT PAGE PRICE NOT FOUND | "
-            f"candidates={len(candidates)}"
-        )
+def extract_product_id(url):
+    if not url:
         return None
 
-    # Prefer smaller realistic selling-price candidate.
-    # This is only a fallback when page exposes multiple
-    # price fields.
-    selected = min(filtered)
+    # Amazon ASIN
+    patterns = [
+        r"/dp/([A-Z0-9]{10})",
+        r"/gp/product/([A-Z0-9]{10})",
+        r"/product/([A-Z0-9]{10})",
+    ]
 
-    price_debug(
-        f"PRODUCT PAGE PRICE SELECTED | "
-        f"₹{selected:.0f} | "
-        f"candidates={len(filtered)}"
-    )
+    for pattern in patterns:
 
-    return selected
+        match = re.search(
+            pattern,
+            url,
+            re.IGNORECASE,
+        )
+
+        if match:
+            return match.group(1)
+
+    return None
 
 
 # ============================================================
 # PRICEHISTORY SEARCH
 # ============================================================
 
-def pricehistory_search(query):
-    if not query:
-        return None
+def pricehistory_search(
+    product_url=None,
+    product_title=None,
+):
+    """
+    Search PriceHistory.
 
-    encoded = quote(query)
+    Priority:
+        1. Resolved Amazon/Flipkart URL
+        2. Product title
 
-    urls = [
-        f"https://pricehistory.app/search?q={encoded}",
-        f"https://pricehistoryapp.com/search?q={encoded}",
+    This is intentionally URL-first because the exact
+    product URL gives PriceHistory a much better chance
+    of finding the correct product.
+    """
+
+    queries = []
+
+    if product_url:
+        queries.append(product_url)
+
+    if product_title:
+        queries.append(product_title)
+
+    endpoints = [
+        "https://pricehistory.app/search?q={}",
+        "https://pricehistoryapp.com/search?q={}",
     ]
 
-    for search_url in urls:
-        try:
-            response = requests.get(
-                search_url,
-                headers=HEADERS,
-                timeout=REQUEST_TIMEOUT,
+    for query in queries:
+
+        if not query:
+            continue
+
+        encoded = quote(
+            query,
+            safe="",
+        )
+
+        for endpoint in endpoints:
+
+            search_url = endpoint.format(
+                encoded
             )
 
-            if response.status_code != 200:
-                continue
+            try:
 
-            soup = BeautifulSoup(
-                response.text,
-                "html.parser",
-            )
-
-            for link in soup.find_all(
-                "a",
-                href=True,
-            ):
-                href = link.get(
-                    "href",
-                    "",
-                ).strip()
-
-                link_text = link.get_text(
-                    " ",
-                    strip=True,
+                response = requests.get(
+                    search_url,
+                    headers=HEADERS,
+                    timeout=REQUEST_TIMEOUT,
                 )
 
-                if not href or not link_text:
+                if response.status_code != 200:
                     continue
 
-                full_url = urljoin(
-                    search_url,
-                    href,
+                soup = BeautifulSoup(
+                    response.text,
+                    "html.parser",
                 )
 
-                if "pricehistory" in full_url.lower():
-                    return {
-                        "title": link_text,
-                        "url": full_url,
-                    }
+                candidates = []
+
+                for link in soup.find_all(
+                    "a",
+                    href=True,
+                ):
+
+                    href = (
+                        link.get(
+                            "href",
+                            "",
+                        )
+                        .strip()
+                    )
+
+                    link_text = (
+                        link.get_text(
+                            " ",
+                            strip=True,
+                        )
+                    )
+
+                    if not href:
+                        continue
+
+                    full_url = urljoin(
+                        search_url,
+                        href,
+                    )
+
+                    if (
+                        "pricehistory"
+                        not in full_url.lower()
+                    ):
+                        continue
+
+                    if full_url.rstrip("/") == search_url.rstrip("/"):
+                        continue
+
+                    candidates.append(
+                        {
+                            "title": link_text,
+                            "url": full_url,
+                        }
+                    )
+
+                # Prefer candidates that contain
+                # recognizable product identifiers.
+                if candidates:
+
+                    if product_url:
+
+                        product_id = (
+                            extract_product_id(
+                                product_url
+                            )
+                        )
+
+                        if product_id:
+
+                            for candidate in candidates:
+
+                                if product_id.lower() in (
+                                    candidate["url"].lower()
+                                ):
+                                    return candidate
+
+                    return candidates[0]
+
+            except Exception:
+                continue
+
+    return None
+
+
+# ============================================================
+# FETCH PAGE
+# ============================================================
+
+def fetch_page(url):
+    if not url:
+        return None
+
+    try:
+
+        response = requests.get(
+            url,
+            headers=HEADERS,
+            timeout=REQUEST_TIMEOUT,
+        )
+
+        if response.status_code != 200:
+            return None
+
+        return response.text
+
+    except Exception:
+        return None
+
+
+# ============================================================
+# CURRENT PRICE FROM PRODUCT PAGE
+# ============================================================
+
+def extract_product_page_price(html):
+    if not html:
+        return None
+
+    soup = BeautifulSoup(
+        html,
+        "html.parser",
+    )
+
+    # --------------------------------------------------------
+    # JSON-LD
+    # --------------------------------------------------------
+
+    for script in soup.find_all(
+        "script",
+        type="application/ld+json",
+    ):
+
+        try:
+
+            data = script.string
+
+            if not data:
+                continue
+
+            objects = json_safe_loads(data)
+
+            for obj in objects:
+
+                price = find_price_in_json(
+                    obj
+                )
+
+                if price is not None:
+                    return price
 
         except Exception:
             continue
+
+    # --------------------------------------------------------
+    # Common HTML attributes
+    # --------------------------------------------------------
+
+    selectors = [
+        "[itemprop='price']",
+        ".a-price-whole",
+        ".a-offscreen",
+        "[data-price]",
+        "[data-asin-price]",
+    ]
+
+    for selector in selectors:
+
+        try:
+
+            elements = soup.select(
+                selector
+            )
+
+            for element in elements:
+
+                value = (
+                    element.get_text(
+                        " ",
+                        strip=True,
+                    )
+                )
+
+                if not value:
+                    value = (
+                        element.get(
+                            "content"
+                        )
+                        or element.get(
+                            "data-price"
+                        )
+                    )
+
+                price = clean_price(
+                    value
+                )
+
+                if price is not None:
+                    return price
+
+        except Exception:
+            continue
+
+    # --------------------------------------------------------
+    # Visible text
+    # --------------------------------------------------------
+
+    text = soup.get_text(
+        " ",
+        strip=True,
+    )
+
+    patterns = [
+        r"(?:₹|Rs\.?|INR)\s*([\d,]+(?:\.\d+)?)",
+    ]
+
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
+            text,
+            re.IGNORECASE,
+        )
+
+        if match:
+
+            price = clean_price(
+                match.group(1)
+            )
+
+            if price is not None:
+                return price
+
+    return None
+
+
+def json_safe_loads(data):
+    import json
+
+    parsed = json.loads(data)
+
+    if isinstance(parsed, list):
+        return parsed
+
+    return [parsed]
+
+
+def find_price_in_json(obj):
+
+    if isinstance(obj, dict):
+
+        offers = obj.get("offers")
+
+        if offers:
+
+            if isinstance(
+                offers,
+                list,
+            ):
+                for offer in offers:
+
+                    price = find_price_in_json(
+                        offer
+                    )
+
+                    if price is not None:
+                        return price
+
+            elif isinstance(
+                offers,
+                dict,
+            ):
+                price = clean_price(
+                    offers.get("price")
+                )
+
+                if price is not None:
+                    return price
+
+        for key in (
+            "price",
+            "lowPrice",
+        ):
+
+            if key in obj:
+
+                price = clean_price(
+                    obj.get(key)
+                )
+
+                if price is not None:
+                    return price
 
     return None
 
@@ -796,6 +639,7 @@ def extract_historical_low(html):
             r"(?:₹|rs\.?|inr)?\s*"
             r"([\d,]+(?:\.\d+)?)"
         ),
+
         (
             r"(?:lowest\s*ever|"
             r"lowest\s*recorded)"
@@ -806,11 +650,13 @@ def extract_historical_low(html):
     ]
 
     for pattern in patterns:
+
         for match in re.finditer(
             pattern,
             text,
-            re.I,
+            re.IGNORECASE,
         ):
+
             value = clean_price(
                 match.group(1)
             )
@@ -819,18 +665,20 @@ def extract_historical_low(html):
                 values.append(value)
 
     raw_patterns = [
-        r'"lowestPrice"\s*:\s*"?(?:₹|Rs\.?|INR)?\s*([\d,.]+)',
-        r'"lowest_price"\s*:\s*"?(?:₹|Rs\.?|INR)?\s*([\d,.]+)',
-        r'"historicalLow"\s*:\s*"?(?:₹|Rs\.?|INR)?\s*([\d,.]+)',
-        r'"historical_low"\s*:\s*"?(?:₹|Rs\.?|INR)?\s*([\d,.]+)',
+        r'"lowestPrice"\s*:\s*"?([\d,.]+)"?',
+        r'"lowest_price"\s*:\s*"?([\d,.]+)"?',
+        r'"historicalLow"\s*:\s*"?([\d,.]+)"?',
+        r'"historical_low"\s*:\s*"?([\d,.]+)"?',
     ]
 
     for pattern in raw_patterns:
+
         for match in re.finditer(
             pattern,
             html,
-            re.I,
+            re.IGNORECASE,
         ):
+
             value = clean_price(
                 match.group(1)
             )
@@ -852,6 +700,7 @@ def suspicious_historical_low(
     current_price,
     historical_low,
 ):
+
     if (
         current_price is None
         or historical_low is None
@@ -859,10 +708,14 @@ def suspicious_historical_low(
         return False
 
     if current_price >= 5000:
-        if historical_low < current_price * 0.08:
+
+        if historical_low < (
+            current_price * 0.08
+        ):
             return True
 
     if current_price >= 2000:
+
         if historical_low < 100:
             return True
 
@@ -877,7 +730,9 @@ def compare_price(
     current_price,
     historical_low,
 ):
+
     if current_price is None:
+
         return {
             "status": "PRICE_UNKNOWN",
             "reason": (
@@ -887,6 +742,7 @@ def compare_price(
         }
 
     if historical_low is None:
+
         return {
             "status": "HISTORICAL_LOW_UNKNOWN",
             "reason": (
@@ -896,6 +752,7 @@ def compare_price(
         }
 
     if current_price <= historical_low:
+
         return {
             "status": "NEW_LOW",
             "reason": (
@@ -910,9 +767,12 @@ def compare_price(
         historical_low * NEAR_LOW_PERCENT,
     )
 
-    difference = current_price - historical_low
+    difference = (
+        current_price - historical_low
+    )
 
     if difference <= tolerance:
+
         return {
             "status": "NEAR_LOW",
             "reason": (
@@ -944,180 +804,107 @@ def validate_deal(
     source=None,
     text=None,
 ):
+
     try:
+
         title = (title or "").strip()
         text = (text or "").strip()
 
-        price_debug("=" * 60)
-        price_debug(
-            f"VALIDATION START | title={title[:120]}"
-        )
-        price_debug(
-            f"INPUT PRICE={price} | URL={url}"
-        )
-
-        # ----------------------------------------------------
-        # TITLE
-        # ----------------------------------------------------
-
         if not title:
-            return {
-                "status": "INVALID",
-                "historical_low": None,
-                "category": None,
-                "reason": (
-                    "Product title "
-                    "could not be determined"
-                ),
-                "source": source,
-                "url": url,
-            }
+            title = "Unknown Product"
 
         # ----------------------------------------------------
-        # PRICE FROM INPUT
+        # LOCAL PRICE
         # ----------------------------------------------------
 
-        current_price = clean_price(price)
-
-        if current_price is not None:
-            price_debug(
-                f"INPUT PRICE FOUND | ₹{current_price:.0f}"
-            )
-
-        # ----------------------------------------------------
-        # PRICE FROM TELEGRAM / DEAL TEXT
-        # ----------------------------------------------------
+        current_price = clean_price(
+            price
+        )
 
         if current_price is None:
-            price_debug(
-                "Trying price extraction from deal text..."
+            current_price = extract_price(
+                text
             )
 
-            current_price = extract_price(text)
-
         # ----------------------------------------------------
-        # PRICE FROM PRODUCT PAGE
+        # RESOLVE URL FIRST
         # ----------------------------------------------------
 
-        final_url = url
+        final_url = resolve_url(
+            url
+        )
 
-        if current_price is None and url:
-            price_debug(
-                "Deal text has no price. "
-                "Trying product URL..."
-            )
-
-            final_url = resolve_url(url)
-
-            if final_url:
-                html = fetch_page(final_url)
-
-                if html:
-                    current_price = (
-                        extract_product_page_price(
-                            html
-                        )
-                    )
-                else:
-                    price_debug(
-                        "PRODUCT PAGE UNAVAILABLE"
-                    )
-
-        # ----------------------------------------------------
-        # PRICE STILL UNKNOWN
-        # ----------------------------------------------------
-
-        if current_price is None:
-            price_debug(
-                "FINAL RESULT: PRICE UNKNOWN"
-            )
-
-            return {
-                "status": "PRICE_UNKNOWN",
-                "historical_low": None,
-                "category": None,
-                "reason": (
-                    "Deal price could not be extracted "
-                    "from deal text or product page"
-                ),
-                "source": source,
-                "url": final_url or url,
-            }
-
-        price_debug(
-            f"FINAL CURRENT PRICE | ₹{current_price:.0f}"
+        store = detect_store(
+            final_url
         )
 
         # ----------------------------------------------------
-        # MINIMUM PRICE
+        # PRODUCT PAGE PRICE
         # ----------------------------------------------------
 
-        if current_price <= MIN_PRICE:
+        if current_price is None and final_url:
+
+            product_html = fetch_page(
+                final_url
+            )
+
+            if product_html:
+
+                current_price = (
+                    extract_product_page_price(
+                        product_html
+                    )
+                )
+
+        # ----------------------------------------------------
+        # MIN PRICE
+        # ----------------------------------------------------
+
+        if (
+            current_price is not None
+            and current_price <= MIN_PRICE
+        ):
+
             return {
                 "status": "PRICE_REJECT",
                 "historical_low": None,
+                "current_price": current_price,
                 "category": None,
                 "reason": (
                     f"Deal price ₹{current_price:.0f} "
-                    f"is not above minimum price "
-                    f"₹{MIN_PRICE}"
+                    f"is not above minimum "
+                    f"price ₹{MIN_PRICE}"
                 ),
                 "source": source,
-                "url": final_url or url,
+                "url": final_url,
             }
 
         # ----------------------------------------------------
-        # CATEGORY
+        # PRICEHISTORY
+        #
+        # IMPORTANT:
+        # Resolved URL is searched FIRST.
+        # Title is only fallback.
         # ----------------------------------------------------
 
-        category_result = classify_product(
-            title,
-            text,
+        result = pricehistory_search(
+            product_url=final_url,
+            product_title=title,
         )
-
-        if not category_result["matched"]:
-            return {
-                "status": "CATEGORY_REJECT",
-                "historical_low": None,
-                "category": None,
-                "reason": category_result["reason"],
-                "source": source,
-                "url": final_url or url,
-            }
-
-        category = category_result["category"]
-
-        # ----------------------------------------------------
-        # RESOLVE URL IF NOT ALREADY DONE
-        # ----------------------------------------------------
-
-        if not final_url:
-            final_url = resolve_url(url)
-
-        # ----------------------------------------------------
-        # PRICEHISTORY SEARCH
-        # ----------------------------------------------------
-
-        price_debug(
-            f"PRICEHISTORY SEARCH | query={title[:120]}"
-        )
-
-        result = pricehistory_search(title)
 
         historical_low = None
         pricehistory_url = None
         pricehistory_title = ""
 
         if result:
-            pricehistory_url = result.get("url")
+
+            pricehistory_url = result.get(
+                "url"
+            )
+
             pricehistory_title = result.get(
                 "title",
                 "",
-            )
-
-            price_debug(
-                f"PRICEHISTORY RESULT | "
-                f"{pricehistory_url}"
             )
 
             html = fetch_page(
@@ -1125,30 +912,54 @@ def validate_deal(
             )
 
             if html:
+
                 historical_low = (
-                    extract_historical_low(html)
+                    extract_historical_low(
+                        html
+                    )
                 )
 
-        else:
-            price_debug(
-                "PRICEHISTORY RESULT NOT FOUND"
-            )
-
         # ----------------------------------------------------
-        # HISTORICAL LOW NOT FOUND
+        # NO HISTORICAL LOW
         # ----------------------------------------------------
 
         if historical_low is None:
+
             return {
                 "status": "HISTORICAL_LOW_UNKNOWN",
                 "historical_low": None,
-                "category": category,
+                "current_price": current_price,
+                "category": None,
                 "reason": (
                     "Historical low could not "
                     "be verified from PriceHistory"
                 ),
                 "source": source,
-                "url": final_url or url,
+                "url": final_url,
+                "store": store,
+                "pricehistory_url": pricehistory_url,
+                "pricehistory_title": pricehistory_title,
+            }
+
+        # ----------------------------------------------------
+        # PRICE STILL UNKNOWN
+        # ----------------------------------------------------
+
+        if current_price is None:
+
+            return {
+                "status": "PRICE_UNKNOWN",
+                "historical_low": historical_low,
+                "current_price": None,
+                "category": None,
+                "reason": (
+                    "Deal price could not be "
+                    "extracted from deal text "
+                    "or product page"
+                ),
+                "source": source,
+                "url": final_url,
+                "store": store,
                 "pricehistory_url": pricehistory_url,
                 "pricehistory_title": pricehistory_title,
             }
@@ -1161,17 +972,20 @@ def validate_deal(
             current_price,
             historical_low,
         ):
+
             return {
                 "status": "SUSPICIOUS_LOW",
                 "historical_low": historical_low,
-                "category": category,
+                "current_price": current_price,
+                "category": None,
                 "reason": (
                     f"Historical low ₹{historical_low:.0f} "
                     f"appears suspicious against "
                     f"current price ₹{current_price:.0f}"
                 ),
                 "source": source,
-                "url": final_url or url,
+                "url": final_url,
+                "store": store,
                 "pricehistory_url": pricehistory_url,
                 "pricehistory_title": pricehistory_title,
             }
@@ -1188,23 +1002,22 @@ def validate_deal(
         return {
             "status": comparison["status"],
             "historical_low": historical_low,
-            "category": category,
+            "current_price": current_price,
+            "category": None,
             "reason": comparison["reason"],
             "source": source,
-            "url": final_url or url,
+            "url": final_url,
+            "store": store,
             "pricehistory_url": pricehistory_url,
             "pricehistory_title": pricehistory_title,
         }
 
     except Exception as e:
-        price_debug(
-            f"VALIDATOR EXCEPTION | "
-            f"{type(e).__name__}: {e}"
-        )
 
         return {
             "status": "VALIDATOR_ERROR",
             "historical_low": None,
+            "current_price": None,
             "category": None,
             "reason": (
                 f"{type(e).__name__}: {e}"
@@ -1226,53 +1039,24 @@ if __name__ == "__main__":
     print("=" * 60)
 
     tests = [
-        "Wireless Headphones",
-        "Running Shoes",
-        "Office Chair",
-        "Laptop",
-        "Samsung Refrigerator",
-        "Phone Cover",
-        "Tempered Glass",
-        "USB Cable",
-    ]
-
-    print("\nCATEGORY TESTS")
-    print("-" * 60)
-
-    for product in tests:
-        result = classify_product(product)
-
-        print(
-            f"{product:30} -> "
-            f"{result['matched']} | "
-            f"{result['category']} | "
-            f"{result['reason']}"
-        )
-
-    price_tests = [
-        "Deal Price: ₹24,999",
-        "🔥 Deal at Rs 18,999",
-        "Offer Price ₹34,999",
-        "Now at ₹12,499",
-        "Buy at INR 25999",
-        "₹49,999 only",
-        "24999/-",
-        "Deal Price - 24999",
-        "Deal @ ₹12999",
-        "Current Price: Rs. 14,999",
-        "Sale Price: INR 19,999",
+        "ASUS Dual GeForce RTX 5060 8GB GDDR7 OC Edition "
+        "Video Card DUAL-RTX5060-O8G @52,999",
+        "Laptop Deal Price: ₹24,999",
+        "Wireless Headphones @12,999",
+        "Samsung Refrigerator Rs. 34,999",
     ]
 
     print("\nPRICE TESTS")
     print("-" * 60)
 
-    for test_text in price_tests:
-        price = extract_price(test_text)
+    for text in tests:
+
+        price = extract_price(text)
 
         print(
-            f"{test_text:40} -> ₹{price}"
+            f"{text[:45]:45} -> ₹{price}"
         )
 
     print("=" * 60)
-    print("VALIDATOR TEST COMPLETE")
+    print("TEST COMPLETE")
     print("=" * 60)
