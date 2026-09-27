@@ -1,20 +1,5 @@
 # loot_listener.py
 # VERSION: 2.8
-#
-# Features:
-# - Telegram broadcast channel auto-discovery
-# - New message monitoring
-# - Edited message monitoring
-# - 60 sec channel refresh
-# - 60 sec heartbeat
-# - Web deal scanning
-# - Duplicate URL protection
-# - Deal validation through deal_validator.py
-# - Accepted deals -> lootersAmer
-# - Reject/error logs -> LOG_CHANNEL
-# - Persistent processed URL state
-# - Price extraction from Telegram text
-# - Price extraction fallback from product webpage
 
 import os
 import re
@@ -48,7 +33,10 @@ API_ID = int(os.getenv("TG_API_ID", "0"))
 API_HASH = os.getenv("TG_API_HASH", "")
 TG_SESSION = os.getenv("TG_SESSION", "")
 
-DESTINATION = "lootersAmer"
+DESTINATION = os.getenv(
+    "DESTINATION",
+    "lootersAmer",
+)
 
 LOG_CHANNEL = os.getenv(
     "LOG_CHANNEL",
@@ -125,7 +113,12 @@ def load_state():
         else:
             processed_urls = set()
 
-    except Exception:
+    except Exception as e:
+        print(
+            "STATE LOAD ERROR:",
+            type(e).__name__,
+            str(e),
+        )
         processed_urls = set()
 
 
@@ -145,8 +138,9 @@ def save_state():
 
     except Exception as e:
         print(
-            f"STATE SAVE ERROR: "
-            f"{type(e).__name__}: {e}"
+            "STATE SAVE ERROR:",
+            type(e).__name__,
+            str(e),
         )
 
 
@@ -162,8 +156,8 @@ known_channels = {}
 # ============================================================
 
 URL_PATTERN = re.compile(
-    r"https?://[^\s<>\]\)\"']+",
-    re.I,
+    r"https?://[^\s<>]+",
+    re.IGNORECASE,
 )
 
 
@@ -192,25 +186,21 @@ def extract_urls(text):
 
 def extract_deal_price(text):
     """
-    Extract price from Telegram deal text.
+    Extract price from Telegram message.
 
-    Examples supported:
+    Supports examples like:
 
-        Deal Price: ₹24,999
-        Deal Price ₹24,999
-        Deal at ₹24,999
-        Deal @ ₹24,999
-        Offer Price: ₹18,999
-        Offer: ₹18,999
-        Sale Price: ₹19,999
-        Current Price: ₹21,999
-        Buy at ₹25,999
-        Now at ₹25,999
-        ₹49,999 only
-        Rs 24,999
-        Rs. 24,999
-        INR 24,999
-        24999/-
+    ₹24,999
+    Rs 24,999
+    Rs. 24,999
+    INR 24999
+    Deal Price: ₹24,999
+    Deal at ₹18,999
+    Offer Price: 34999
+    Now at 12999
+    Buy at 25999
+    24999/-
+    24999 only
     """
 
     if not text:
@@ -218,88 +208,57 @@ def extract_deal_price(text):
 
     text = str(text)
 
-    text = text.replace("\u00a0", " ")
-    text = text.replace("\u200b", "")
-    text = text.replace("\u200c", "")
-    text = text.replace("\u200d", "")
-
     patterns = [
+
         # Deal Price
-        r"\bdeal\s+price\s*[:\-@]?\s*"
-        r"(?:₹|rs\.?|inr)?\s*"
-        r"([\d,]+(?:\.\d+)?)",
-
-        # Deal at
-        r"\bdeal\s+at\s*[:\-@]?\s*"
-        r"(?:₹|rs\.?|inr)?\s*"
-        r"([\d,]+(?:\.\d+)?)",
-
-        # Deal @
-        r"\bdeal\s*@\s*"
+        r"(?:deal\s*price|deal\s*at)"
+        r"\s*[:\-@]?\s*"
         r"(?:₹|rs\.?|inr)?\s*"
         r"([\d,]+(?:\.\d+)?)",
 
         # Offer Price
-        r"\boffer\s+price\s*[:\-@]?\s*"
-        r"(?:₹|rs\.?|inr)?\s*"
-        r"([\d,]+(?:\.\d+)?)",
-
-        # Offer
-        r"\boffer\s*[:\-@]?\s*"
+        r"(?:offer\s*price|offer)"
+        r"\s*[:\-@]?\s*"
         r"(?:₹|rs\.?|inr)?\s*"
         r"([\d,]+(?:\.\d+)?)",
 
         # Sale Price
-        r"\bsale\s+price\s*[:\-@]?\s*"
+        r"(?:sale\s*price)"
+        r"\s*[:\-@]?\s*"
         r"(?:₹|rs\.?|inr)?\s*"
         r"([\d,]+(?:\.\d+)?)",
 
         # Current Price
-        r"\bcurrent\s+price\s*[:\-@]?\s*"
+        r"(?:current\s*price)"
+        r"\s*[:\-@]?\s*"
         r"(?:₹|rs\.?|inr)?\s*"
         r"([\d,]+(?:\.\d+)?)",
 
-        # Buy at
-        r"\bbuy\s+at\s*[:\-@]?\s*"
+        # Buy at / Now at
+        r"(?:buy\s*at|now\s*at)"
+        r"\s*[:\-@]?\s*"
         r"(?:₹|rs\.?|inr)?\s*"
         r"([\d,]+(?:\.\d+)?)",
 
-        # Now at
-        r"\bnow\s+at\s*[:\-@]?\s*"
-        r"(?:₹|rs\.?|inr)?\s*"
+        # Explicit currency
+        r"(?:₹|rs\.?|inr)"
+        r"\s*"
         r"([\d,]+(?:\.\d+)?)",
 
-        # Buy now
-        r"\bbuy\s+now\s*[:\-@]?\s*"
-        r"(?:₹|rs\.?|inr)?\s*"
-        r"([\d,]+(?:\.\d+)?)",
-
-        # ₹24,999
-        r"₹\s*([\d,]+(?:\.\d+)?)",
-
-        # Rs 24,999
-        r"\bRs\.?\s*([\d,]+(?:\.\d+)?)",
-
-        # INR 24,999
-        r"\bINR\s*([\d,]+(?:\.\d+)?)",
-
-        # 24999/-
+        # Number followed by /-
         r"\b([\d,]{4,})\s*/-",
 
-        # 24999 only
+        # Number followed by only
         r"\b([\d,]{4,})\s+only\b",
 
-        # Price: 24999
-        r"\bprice\s*[:\-@]?\s*"
-        r"(?:₹|rs\.?|inr)?\s*"
-        r"([\d,]+(?:\.\d+)?)",
     ]
 
     for pattern in patterns:
+
         match = re.search(
             pattern,
             text,
-            re.I,
+            re.IGNORECASE,
         )
 
         if not match:
@@ -307,14 +266,15 @@ def extract_deal_price(text):
 
         try:
             value = match.group(1)
-            value = value.replace(",", "")
 
-            price = float(value)
+            value = value.replace(
+                ",",
+                "",
+            )
 
-            if price > 0:
-                return price
+            return float(value)
 
-        except (ValueError, TypeError):
+        except Exception:
             continue
 
     return None
@@ -325,13 +285,14 @@ def extract_deal_price(text):
 # ============================================================
 
 def extract_product_title(text):
+
     if not text:
         return "Unknown Product"
 
     lines = [
-        x.strip()
-        for x in text.splitlines()
-        if x.strip()
+        line.strip()
+        for line in text.splitlines()
+        if line.strip()
     ]
 
     ignored = {
@@ -371,11 +332,10 @@ def extract_product_title(text):
 
         return line[:300]
 
-    return (
-        lines[0][:300]
-        if lines
-        else "Unknown Product"
-    )
+    if lines:
+        return lines[0][:300]
+
+    return "Unknown Product"
 
 
 # ============================================================
@@ -391,11 +351,9 @@ def normalize_validation_result(result):
                 "status",
                 "UNKNOWN",
             ),
-
             "historical_low": result.get(
                 "historical_low"
             ),
-
             "reason": (
                 result.get("reason")
                 or result.get("reject_reason")
@@ -456,8 +414,7 @@ async def send_log(message):
     )
 
     final_message = (
-        f"[{timestamp}] "
-        f"{message}"
+        f"[{timestamp}] {message}"
     )
 
     print(final_message)
@@ -472,7 +429,6 @@ async def send_log(message):
         )
 
     except Exception as e:
-
         print(
             "LOG CHANNEL ERROR:",
             type(e).__name__,
@@ -544,7 +500,10 @@ async def send_deal(
     validation,
 ):
 
-    status = validation["status"]
+    status = validation.get(
+        "status",
+        "UNKNOWN",
+    )
 
     historical_low = validation.get(
         "historical_low"
@@ -593,7 +552,7 @@ async def send_deal(
     except Exception as e:
 
         await log_error(
-            f"Destination send failed: "
+            "Destination send failed: "
             f"{type(e).__name__}: {e}"
         )
 
@@ -620,50 +579,27 @@ async def process_deal(
     product = extract_product_title(text)
 
     # --------------------------------------------------------
-    # First attempt: Telegram text
+    # Try local Telegram-text price first
     # --------------------------------------------------------
 
     price = extract_deal_price(text)
 
-    price_source = "telegram_text"
-
     # --------------------------------------------------------
-    # If Telegram text has no price, validator will try
-    # webpage extraction from URL.
+    # IMPORTANT:
+    # Do NOT immediately reject if price is missing.
+    #
+    # Pass None to validator so validator can attempt
+    # its own price extraction / web recovery.
     # --------------------------------------------------------
 
     if price is None:
 
         await log_info(
-            f"💰 Price not found in Telegram text | "
-            f"trying webpage extraction | "
-            f"product={product}"
+            "💰 PRICE NOT FOUND IN MESSAGE | "
+            f"Sending to validator/web recovery | "
+            f"product={product} | "
+            f"source={source}"
         )
-
-    else:
-
-        await log_info(
-            f"💰 Price extracted from Telegram | "
-            f"₹{price:.0f} | "
-            f"product={product}"
-        )
-
-    # --------------------------------------------------------
-    # Minimum price only when we already have price
-    # --------------------------------------------------------
-
-    if price is not None and price <= MIN_PRICE:
-
-        await reject(
-            f"Price must be above ₹{MIN_PRICE}",
-            "PRICE_REJECT",
-            source,
-            product,
-            price,
-            urls[0],
-        )
-
-        return
 
     # --------------------------------------------------------
     # Process every URL
@@ -692,52 +628,84 @@ async def process_deal(
         except Exception as e:
 
             await log_error(
-                f"Validator exception | "
+                "Validator exception | "
                 f"{type(e).__name__}: {e}\n"
                 f"{traceback.format_exc()}"
             )
 
             continue
 
-        status = validation["status"]
+        status = validation.get(
+            "status",
+            "UNKNOWN",
+        )
 
         # ----------------------------------------------------
-        # Rejected
+        # ACCEPT
         # ----------------------------------------------------
 
-        if status not in (
+        if status in (
             "NEW_LOW",
             "NEAR_LOW",
         ):
 
-            await reject(
-                validation["reason"],
-                status,
-                source,
+            final_price = price
+
+            # Validator may have recovered price
+            # and returned it in the result.
+            if final_price is None:
+
+                final_price = validation.get(
+                    "current_price"
+                )
+
+            if final_price is None:
+
+                await reject(
+                    "Validator approved status but "
+                    "current price was not returned",
+                    "PRICE_UNKNOWN",
+                    source,
+                    product,
+                    None,
+                    url,
+                )
+
+                continue
+
+            sent = await send_deal(
                 product,
-                price,
+                final_price,
                 url,
+                source,
+                validation,
             )
+
+            if sent:
+
+                processed_urls.add(url)
+
+                save_state()
 
             continue
 
         # ----------------------------------------------------
-        # Accepted
+        # REJECT
         # ----------------------------------------------------
 
-        sent = await send_deal(
+        await reject(
+            validation.get(
+                "reason",
+                "Validator rejected deal",
+            ),
+            status,
+            source,
             product,
             price,
             url,
-            source,
-            validation,
         )
 
-        if sent:
-
-            processed_urls.add(url)
-
-            save_state()
+        # Rejected URLs are NOT permanently processed.
 
 
 # ============================================================
@@ -765,47 +733,45 @@ async def discover_channels():
 
             channel_id = entity.id
 
-            if channel_id not in known_channels:
+            if channel_id in known_channels:
+                continue
 
-                known_channels[channel_id] = entity
+            known_channels[channel_id] = entity
+            new_channels += 1
 
-                new_channels += 1
+            username = getattr(
+                entity,
+                "username",
+                None,
+            )
 
-                username = getattr(
+            name = (
+                f"@{username}"
+                if username
+                else getattr(
                     entity,
-                    "username",
+                    "title",
                     None,
                 )
+                or str(channel_id)
+            )
 
-                name = (
-                    getattr(
-                        entity,
-                        "title",
-                        None,
-                    )
-                    or (
-                        f"@{username}"
-                        if username
-                        else str(channel_id)
-                    )
-                )
-
-                await log_info(
-                    f"📢 NEW CHANNEL DISCOVERED: "
-                    f"{name}"
-                )
+            await log_info(
+                "📢 NEW CHANNEL DISCOVERED: "
+                f"{name}"
+            )
 
         if new_channels:
 
             await log_info(
-                f"📡 Channel discovery complete | "
+                "📡 Channel discovery complete | "
                 f"total={len(known_channels)}"
             )
 
     except Exception as e:
 
         await log_error(
-            f"Channel discovery failed: "
+            "Channel discovery failed: "
             f"{type(e).__name__}: {e}"
         )
 
@@ -832,7 +798,7 @@ async def channel_refresh_loop():
         except Exception as e:
 
             await log_error(
-                f"Channel refresh error: "
+                "Channel refresh error: "
                 f"{type(e).__name__}: {e}"
             )
 
@@ -897,7 +863,7 @@ async def web_scan_loop():
                 continue
 
             await log_info(
-                f"🌐 WEB SCAN COMPLETE | "
+                "🌐 WEB SCAN COMPLETE | "
                 f"candidates={len(candidates)}"
             )
 
@@ -941,7 +907,7 @@ async def web_scan_loop():
         except Exception as e:
 
             await log_error(
-                f"Web scan error: "
+                "Web scan error: "
                 f"{type(e).__name__}: {e}"
             )
 
@@ -964,15 +930,15 @@ async def new_message_handler(event):
         ):
             return
 
-        source = getattr(
+        username = getattr(
             chat,
             "username",
             None,
         )
 
-        if source:
+        if username:
 
-            source = f"@{source}"
+            source = f"@{username}"
 
         else:
 
@@ -992,7 +958,7 @@ async def new_message_handler(event):
     except Exception as e:
 
         await log_error(
-            f"NewMessage handler error: "
+            "NewMessage handler error: "
             f"{type(e).__name__}: {e}"
         )
 
@@ -1015,15 +981,15 @@ async def edited_message_handler(event):
         ):
             return
 
-        source = getattr(
+        username = getattr(
             chat,
             "username",
             None,
         )
 
-        if source:
+        if username:
 
-            source = f"@{source}"
+            source = f"@{username}"
 
         else:
 
@@ -1043,7 +1009,7 @@ async def edited_message_handler(event):
     except Exception as e:
 
         await log_error(
-            f"MessageEdited handler error: "
+            "MessageEdited handler error: "
             f"{type(e).__name__}: {e}"
         )
 
@@ -1070,15 +1036,17 @@ async def main():
         None,
     )
 
-    display_name = (
-        f"@{username}"
-        if username
-        else getattr(
+    if username:
+
+        display_name = f"@{username}"
+
+    else:
+
+        display_name = getattr(
             me,
             "first_name",
             "Telegram User",
         )
-    )
 
     await log_info(
         f"🚀 Loot Hunter v{VERSION} started | "
@@ -1088,7 +1056,7 @@ async def main():
     await discover_channels()
 
     await log_info(
-        f"👀 Listening to "
+        "👀 Listening to "
         f"{len(known_channels)} broadcast channels"
     )
 
@@ -1148,809 +1116,3 @@ if __name__ == "__main__":
         traceback.print_exc()
 
         raise
-```
-
-### `deal_validator.py`
-
-```python
-# deal_validator.py
-# VERSION: 2.8
-
-import re
-import json
-import requests
-
-from bs4 import BeautifulSoup
-from urllib.parse import quote, urljoin
-
-
-VERSION = "2.8"
-
-
-# ============================================================
-# CONFIG
-# ============================================================
-
-MIN_PRICE = 1000
-
-NEAR_LOW_PERCENT = 0.03
-NEAR_LOW_MAX_RUPEES = 50
-
-REQUEST_TIMEOUT = 15
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/140.0 Safari/537.36"
-    ),
-    "Accept-Language": "en-IN,en;q=0.9",
-}
-
-
-# ============================================================
-# CATEGORIES
-# ============================================================
-
-ALLOWED_CATEGORIES = [
-
-    # Electronics
-    "Smartphones",
-    "Mobile Phones",
-    "Laptops",
-    "MacBooks",
-    "Tablets",
-    "iPads",
-    "Desktop Computers",
-    "Monitors",
-    "TVs",
-    "Smart TVs",
-    "Projectors",
-    "Cameras",
-    "Camera Lenses",
-    "Gaming Consoles",
-    "Graphics Cards",
-    "GPU",
-    "Processors",
-    "CPU",
-    "Motherboards",
-    "RAM",
-    "SSD",
-    "HDD",
-    "NAS",
-    "Printers",
-    "Scanners",
-    "Routers",
-    "Wi-Fi Devices",
-    "Networking Equipment",
-    "Keyboards",
-    "Mice",
-    "Webcams",
-
-    # Audio
-    "Headphones",
-    "Earphones",
-    "TWS Earbuds",
-    "Bluetooth Speakers",
-    "Home Audio Systems",
-    "Soundbars",
-    "Amplifiers",
-    "Microphones",
-    "Audio Equipment",
-
-    # Appliances
-    "Air Conditioners",
-    "Refrigerators",
-    "Washing Machines",
-    "Dishwashers",
-    "Microwave Ovens",
-    "OTG Ovens",
-    "Air Purifiers",
-    "Vacuum Cleaners",
-    "Water Purifiers",
-    "Fans",
-    "Room Heaters",
-    "Kitchen Appliances",
-    "Coffee Machines",
-    "Electric Kettles",
-    "Induction Cooktops",
-
-    # Smart Home
-    "Smart Home Devices",
-    "Smart Lighting",
-    "Smart Switches",
-    "Smart Plugs",
-    "Security Cameras",
-    "Smart Doorbells",
-    "Home Automation Devices",
-
-    # Furniture
-    "Sofas",
-    "Beds",
-    "Mattresses",
-    "Office Chairs",
-    "Gaming Chairs",
-    "Recliners",
-    "Study Tables",
-    "Office Tables",
-    "Dining Tables",
-    "Dining Chairs",
-    "Wardrobes",
-    "Cabinets",
-    "Bookshelves",
-    "TV Units",
-    "Shoe Racks",
-    "Coffee Tables",
-    "Side Tables",
-    "Storage Furniture",
-
-    # Sports
-    "Running Shoes",
-    "Sports Shoes",
-    "Football Shoes",
-    "Cricket Bats",
-    "Cricket Equipment",
-    "Badminton Rackets",
-    "Badminton Equipment",
-    "Tennis Equipment",
-    "Basketball Equipment",
-    "Sports Bags",
-    "Gym Equipment",
-    "Dumbbells",
-    "Barbells",
-    "Weight Plates",
-    "Treadmills",
-    "Exercise Bikes",
-    "Cross Trainers",
-    "Yoga Equipment",
-    "Fitness Equipment",
-    "Cycling Equipment",
-    "Sports Accessories",
-
-    # Automotive
-    "Car Accessories",
-    "Bike Accessories",
-    "Car Electronics",
-    "Bike Electronics",
-    "Dashcams",
-    "Car Audio",
-    "Tyres",
-    "Car Care Equipment",
-    "Bike Care Equipment",
-    "Automotive Tools",
-    "Automotive Equipment",
-
-    # Tools
-    "Power Tools",
-    "Drills",
-    "Grinders",
-    "Screwdriver Sets",
-    "Tool Kits",
-    "Hand Tools",
-    "Measuring Tools",
-    "Workshop Equipment",
-    "Hardware Equipment",
-    "Welding Equipment",
-    "Professional Tools",
-
-    # Travel
-    "Trolley Bags",
-    "Suitcases",
-    "Backpacks",
-    "Duffle Bags",
-    "Travel Bags",
-    "Travel Gear",
-    "Travel Accessories",
-
-    # Outdoor
-    "Tents",
-    "Camping Gear",
-    "Trekking Equipment",
-    "Hiking Equipment",
-    "Outdoor Furniture",
-    "Outdoor Equipment",
-
-    # Home
-    "Home Utility",
-    "Home Organization",
-    "Storage Solutions",
-    "Cleaning Equipment",
-    "Kitchen Storage",
-    "Bathroom Utility",
-    "Dining & Serving",
-    "Home Improvement Equipment",
-
-    # Kids
-    "Premium Toys",
-    "Building Sets",
-    "Construction Sets",
-    "Educational Toys",
-    "Kids Ride-ons",
-    "Kids Equipment",
-    "Learning Devices",
-
-    # Pets
-    "Pet Beds",
-    "Pet Feeders",
-    "Pet Grooming Equipment",
-    "Pet Travel Equipment",
-    "Pet Accessories",
-
-    # Garden
-    "Gardening Tools",
-    "Garden Equipment",
-    "Planters",
-    "Outdoor Storage",
-
-    # Books / Education
-    "Books",
-    "Educational Equipment",
-    "Study Equipment",
-    "Educational Devices",
-
-    # Personal Care Devices
-    "Trimmers",
-    "Shavers",
-    "Hair Dryers",
-    "Hair Straighteners",
-    "Hair Styling Appliances",
-    "Electric Grooming Devices",
-    "Electric Personal Care Devices",
-
-    # Professional
-    "Professional Equipment",
-    "Industrial Equipment",
-    "Commercial Equipment",
-    "Testing Equipment",
-]
-
-
-# ============================================================
-# EXCLUDED KEYWORDS
-# ============================================================
-
-EXCLUDED_KEYWORDS = [
-    "phone cover",
-    "phone case",
-    "mobile cover",
-    "mobile case",
-    "back cover",
-    "screen protector",
-    "tempered glass",
-    "charging cable",
-    "usb cable",
-    "data cable",
-    "aux cable",
-    "hdmi cable",
-    "charger",
-    "adapter",
-    "small watch",
-    "smart band",
-    "fitness band",
-    "jewellery",
-    "jewelry",
-    "clothing",
-    "clothes",
-    "fashion",
-    "saree",
-    "shirt",
-    "t shirt",
-    "jeans",
-    "trousers",
-    "dress",
-    "cosmetic",
-    "makeup",
-    "grocery",
-    "food",
-    "daily consumable",
-]
-
-
-# ============================================================
-# TEXT NORMALIZATION
-# ============================================================
-
-def normalize(text):
-
-    if not text:
-        return ""
-
-    text = str(text).lower()
-
-    text = text.replace(
-        "&",
-        " and ",
-    )
-
-    text = text.replace(
-        "/",
-        " ",
-    )
-
-    text = text.replace(
-        "-",
-        " ",
-    )
-
-    text = re.sub(
-        r"[^a-z0-9\s]",
-        " ",
-        text,
-    )
-
-    text = re.sub(
-        r"\s+",
-        " ",
-        text,
-    )
-
-    return text.strip()
-
-
-# ============================================================
-# CATEGORY MATCH
-# ============================================================
-
-def category_match(
-    product_text,
-    category,
-):
-
-    product = normalize(
-        product_text
-    )
-
-    cat = normalize(
-        category
-    )
-
-    if not product or not cat:
-        return False
-
-    if cat in product:
-        return True
-
-    product_words = set(
-        product.split()
-    )
-
-    category_words = set(
-        cat.split()
-    )
-
-    if len(category_words) == 1:
-
-        return bool(
-            product_words.intersection(
-                category_words
-            )
-        )
-
-    return category_words.issubset(
-        product_words
-    )
-
-
-# ============================================================
-# CLASSIFY PRODUCT
-# ============================================================
-
-def classify_product(
-    title,
-    extra_text="",
-):
-
-    combined = normalize(
-        f"{title} {extra_text}"
-    )
-
-    for keyword in EXCLUDED_KEYWORDS:
-
-        if normalize(keyword) in combined:
-
-            return {
-                "matched": False,
-                "category": None,
-                "reason": (
-                    f"Excluded product type: "
-                    f"{keyword}"
-                ),
-            }
-
-    for category in ALLOWED_CATEGORIES:
-
-        if category_match(
-            combined,
-            category,
-        ):
-
-            return {
-                "matched": True,
-                "category": category,
-                "reason": (
-                    f"Matched category: "
-                    f"{category}"
-                ),
-            }
-
-    return {
-        "matched": False,
-        "category": None,
-        "reason": (
-            "Product category is outside "
-            "configured deal categories"
-        ),
-    }
-
-
-# ============================================================
-# PRICE CLEANING
-# ============================================================
-
-def clean_price(value):
-
-    if value is None:
-        return None
-
-    value = str(value).strip()
-
-    value = value.replace(
-        ",",
-        "",
-    )
-
-    value = value.replace(
-        "₹",
-        "",
-    )
-
-    value = re.sub(
-        r"\bRs\.?\s*",
-        "",
-        value,
-        flags=re.I,
-    )
-
-    value = re.sub(
-        r"\bINR\s*",
-        "",
-        value,
-        flags=re.I,
-    )
-
-    match = re.search(
-        r"\d+(?:\.\d+)?",
-        value,
-    )
-
-    if not match:
-        return None
-
-    try:
-
-        price = float(
-            match.group()
-        )
-
-        if price <= 0:
-            return None
-
-        return price
-
-    except Exception:
-        return None
-
-
-# ============================================================
-# PRICE EXTRACTION FROM TEXT
-# ============================================================
-
-def extract_price(text):
-
-    if not text:
-        return None
-
-    text = str(text)
-
-    text = text.replace(
-        "\u00a0",
-        " ",
-    )
-
-    text = text.replace(
-        "\u200b",
-        "",
-    )
-
-    text = text.replace(
-        "\u200c",
-        "",
-    )
-
-    text = text.replace(
-        "\u200d",
-        "",
-    )
-
-    patterns = [
-
-        # Deal Price
-        r"\bdeal\s+price\s*[:\-@]?\s*"
-        r"(?:₹|rs\.?|inr)?\s*"
-        r"([\d,]+(?:\.\d+)?)",
-
-        # Deal at
-        r"\bdeal\s+at\s*[:\-@]?\s*"
-        r"(?:₹|rs\.?|inr)?\s*"
-        r"([\d,]+(?:\.\d+)?)",
-
-        # Deal @
-        r"\bdeal\s*@\s*"
-        r"(?:₹|rs\.?|inr)?\s*"
-        r"([\d,]+(?:\.\d+)?)",
-
-        # Offer Price
-        r"\boffer\s+price\s*[:\-@]?\s*"
-        r"(?:₹|rs\.?|inr)?\s*"
-        r"([\d,]+(?:\.\d+)?)",
-
-        # Offer
-        r"\boffer\s*[:\-@]?\s*"
-        r"(?:₹|rs\.?|inr)?\s*"
-        r"([\d,]+(?:\.\d+)?)",
-
-        # Sale Price
-        r"\bsale\s+price\s*[:\-@]?\s*"
-        r"(?:₹|rs\.?|inr)?\s*"
-        r"([\d,]+(?:\.\d+)?)",
-
-        # Current Price
-        r"\bcurrent\s+price\s*[:\-@]?\s*"
-        r"(?:₹|rs\.?|inr)?\s*"
-        r"([\d,]+(?:\.\d+)?)",
-
-        # Buy at
-        r"\bbuy\s+at\s*[:\-@]?\s*"
-        r"(?:₹|rs\.?|inr)?\s*"
-        r"([\d,]+(?:\.\d+)?)",
-
-        # Now at
-        r"\bnow\s+at\s*[:\-@]?\s*"
-        r"(?:₹|rs\.?|inr)?\s*"
-        r"([\d,]+(?:\.\d+)?)",
-
-        # ₹24,999
-        r"₹\s*([\d,]+(?:\.\d+)?)",
-
-        # Rs 24,999
-        r"\bRs\.?\s*([\d,]+(?:\.\d+)?)",
-
-        # INR 24,999
-        r"\bINR\s*([\d,]+(?:\.\d+)?)",
-
-        # 24999/-
-        r"\b([\d,]{4,})\s*/-",
-
-        # 24999 only
-        r"\b([\d,]{4,})\s+only\b",
-
-        # Price: 24999
-        r"\bprice\s*[:\-@]?\s*"
-        r"(?:₹|rs\.?|inr)?\s*"
-        r"([\d,]+(?:\.\d+)?)",
-    ]
-
-    for pattern in patterns:
-
-        match = re.search(
-            pattern,
-            text,
-            re.I,
-        )
-
-        if not match:
-            continue
-
-        price = clean_price(
-            match.group(1)
-        )
-
-        if price is not None:
-            return price
-
-    return None
-
-
-# ============================================================
-# URL RESOLUTION
-# ============================================================
-
-def resolve_url(url):
-
-    if not url:
-        return None
-
-    try:
-
-        response = requests.get(
-            url,
-            headers=HEADERS,
-            timeout=REQUEST_TIMEOUT,
-            allow_redirects=True,
-        )
-
-        return (
-            response.url
-            or url
-        )
-
-    except Exception:
-
-        return url
-
-
-# ============================================================
-# FETCH PAGE
-# ============================================================
-
-def fetch_page(url):
-
-    if not url:
-        return None
-
-    try:
-
-        response = requests.get(
-            url,
-            headers=HEADERS,
-            timeout=REQUEST_TIMEOUT,
-            allow_redirects=True,
-        )
-
-        if response.status_code != 200:
-            return None
-
-        return response.text
-
-    except Exception:
-
-        return None
-
-
-# ============================================================
-# EXTRACT PRICE FROM JSON-LD
-# ============================================================
-
-def extract_jsonld_price(soup):
-
-    if not soup:
-        return None
-
-    scripts = soup.find_all(
-        "script",
-        type="application/ld+json",
-    )
-
-    for script in scripts:
-
-        raw = script.string or script.get_text(
-            strip=True
-        )
-
-        if not raw:
-            continue
-
-        try:
-
-            data = json.loads(raw)
-
-        except Exception:
-
-            continue
-
-        objects = []
-
-        if isinstance(data, list):
-            objects.extend(data)
-
-        elif isinstance(data, dict):
-
-            objects.append(data)
-
-            graph = data.get("@graph")
-
-            if isinstance(graph, list):
-                objects.extend(graph)
-
-        for obj in objects:
-
-            if not isinstance(
-                obj,
-                dict,
-            ):
-                continue
-
-            offers = obj.get(
-                "offers"
-            )
-
-            if isinstance(
-                offers,
-                dict,
-            ):
-
-                price = clean_price(
-                    offers.get("price")
-                )
-
-                if price is not None:
-                    return price
-
-            elif isinstance(
-                offers,
-                list,
-            ):
-
-                for offer in offers:
-
-                    if not isinstance(
-                        offer,
-                        dict,
-                    ):
-                        continue
-
-                    price = clean_price(
-                        offer.get("price")
-                    )
-
-                    if price is not None:
-                        return price
-
-            price = clean_price(
-                obj.get("price")
-            )
-
-            if price is not None:
-                return price
-
-    return None
-
-
-# ============================================================
-# EXTRACT WEBPAGE PRICE
-# ============================================================
-
-def extract_webpage_price(html):
-
-    if not html:
-        return None
-
-    soup = BeautifulSoup(
-        html,
-        "html.parser",
-    )
-
-    # --------------------------------------------------------
-    # 1. JSON-LD structured data
-    # --------------------------------------------------------
-
-    price = extract_jsonld_price(
-        soup
-    )
-
-    if price is not None:
-        return price
-
-    # --------------------------------------------------------
-    # 2. Meta tags
-    # --------------------------------------------------------
-
-    meta_selectors = [
-        {
-            "property": "product:price:amount"
-        },
-        {
-            "property": "og:price:amount"
-        },
-        {
-            "name": "product:pr
