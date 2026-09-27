@@ -1,4 +1,3 @@
-```python
 # deal_validator.py
 # VERSION: 2.7
 
@@ -10,9 +9,16 @@ from urllib.parse import quote, urljoin
 
 VERSION = "2.7"
 
+
+# ============================================================
+# CONFIG
+# ============================================================
+
 MIN_PRICE = 1000
+
 NEAR_LOW_PERCENT = 0.03
 NEAR_LOW_MAX_RUPEES = 50
+
 REQUEST_TIMEOUT = 15
 
 HEADERS = {
@@ -29,6 +35,7 @@ HEADERS = {
 # ============================================================
 
 ALLOWED_CATEGORIES = [
+
     # Electronics
     "Smartphones",
     "Mobile Phones",
@@ -223,7 +230,7 @@ ALLOWED_CATEGORIES = [
     "Study Equipment",
     "Educational Devices",
 
-    # Personal care devices
+    # Personal Care Devices
     "Trimmers",
     "Shavers",
     "Hair Dryers",
@@ -241,29 +248,36 @@ ALLOWED_CATEGORIES = [
 
 
 # ============================================================
-# EXCLUDED PRODUCTS
+# EXCLUDED KEYWORDS
 # ============================================================
 
 EXCLUDED_KEYWORDS = [
+
     "phone cover",
     "phone case",
     "mobile cover",
     "mobile case",
     "back cover",
+
     "screen protector",
     "tempered glass",
+
     "charging cable",
     "usb cable",
     "data cable",
     "aux cable",
     "hdmi cable",
+
     "charger",
     "adapter",
+
     "small watch",
     "smart band",
     "fitness band",
+
     "jewellery",
     "jewelry",
+
     "clothing",
     "clothes",
     "fashion",
@@ -273,8 +287,10 @@ EXCLUDED_KEYWORDS = [
     "jeans",
     "trousers",
     "dress",
+
     "cosmetic",
     "makeup",
+
     "grocery",
     "food",
     "daily consumable",
@@ -286,6 +302,7 @@ EXCLUDED_KEYWORDS = [
 # ============================================================
 
 def normalize(text):
+
     if not text:
         return ""
 
@@ -295,8 +312,17 @@ def normalize(text):
     text = text.replace("/", " ")
     text = text.replace("-", " ")
 
-    text = re.sub(r"[^a-z0-9\s]", " ", text)
-    text = re.sub(r"\s+", " ", text)
+    text = re.sub(
+        r"[^a-z0-9\s]",
+        " ",
+        text,
+    )
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text,
+    )
 
     return text.strip()
 
@@ -305,7 +331,11 @@ def normalize(text):
 # CATEGORY MATCH
 # ============================================================
 
-def category_match(product_text, category):
+def category_match(
+    product_text,
+    category,
+):
+
     product = normalize(product_text)
     cat = normalize(category)
 
@@ -315,50 +345,67 @@ def category_match(product_text, category):
     if cat in product:
         return True
 
-    product_words = set(product.split())
-    category_words = set(cat.split())
+    product_words = set(
+        product.split()
+    )
+
+    category_words = set(
+        cat.split()
+    )
 
     if len(category_words) == 1:
-        return bool(product_words.intersection(category_words))
+        return bool(
+            product_words.intersection(
+                category_words
+            )
+        )
 
-    return category_words.issubset(product_words)
+    return category_words.issubset(
+        product_words
+    )
 
 
-def classify_product(title, extra_text=""):
-    combined = normalize(f"{title} {extra_text}")
+# ============================================================
+# CLASSIFY PRODUCT
+# ============================================================
 
-    # --------------------------------------------------------
+def classify_product(
+    title,
+    extra_text="",
+):
+
+    combined = normalize(
+        f"{title} {extra_text}"
+    )
+
     # Exclusions first
-    # --------------------------------------------------------
-
     for keyword in EXCLUDED_KEYWORDS:
 
-        normalized_keyword = normalize(keyword)
-
-        if normalized_keyword in combined:
+        if normalize(keyword) in combined:
 
             return {
                 "matched": False,
                 "category": None,
                 "reason": (
-                    f"Rejected: '{keyword}' is an excluded "
-                    f"product type"
+                    f"Excluded product type: "
+                    f"{keyword}"
                 ),
             }
 
-    # --------------------------------------------------------
     # Allowed categories
-    # --------------------------------------------------------
-
     for category in ALLOWED_CATEGORIES:
 
-        if category_match(combined, category):
+        if category_match(
+            combined,
+            category,
+        ):
 
             return {
                 "matched": True,
                 "category": category,
                 "reason": (
-                    f"Accepted: matched category '{category}'"
+                    f"Matched category: "
+                    f"{category}"
                 ),
             }
 
@@ -366,8 +413,8 @@ def classify_product(title, extra_text=""):
         "matched": False,
         "category": None,
         "reason": (
-            "Rejected: product category is not included "
-            "in the configured deal categories"
+            "Product category is outside "
+            "configured deal categories"
         ),
     }
 
@@ -377,48 +424,35 @@ def classify_product(title, extra_text=""):
 # ============================================================
 
 def clean_price(value):
+
     if value is None:
         return None
 
     value = str(value).strip()
 
-    if not value:
-        return None
-
-    # Remove common currency/formatting characters
-    value = value.replace(",", "")
-    value = value.replace("₹", "")
-    value = value.replace("Rs.", "")
-    value = value.replace("Rs", "")
-    value = value.replace("INR", "")
-    value = value.replace("inr", "")
-    value = value.replace("/-", "")
-    value = value.replace("/–", "")
-    value = value.strip()
-
-    # --------------------------------------------------------
-    # K notation
-    # Examples:
-    # 12K
-    # 12.5K
-    # 1.2k
-    # --------------------------------------------------------
-
-    k_match = re.fullmatch(
-        r"(\d+(?:\.\d+)?)\s*[kK]",
-        value,
+    value = value.replace(
+        ",",
+        "",
     )
 
-    if k_match:
+    value = value.replace(
+        "₹",
+        "",
+    )
 
-        try:
-            return float(k_match.group(1)) * 1000
-        except Exception:
-            return None
+    value = re.sub(
+        r"\bRs\.?\b",
+        "",
+        value,
+        flags=re.I,
+    )
 
-    # --------------------------------------------------------
-    # Normal number
-    # --------------------------------------------------------
+    value = re.sub(
+        r"\bINR\b",
+        "",
+        value,
+        flags=re.I,
+    )
 
     match = re.search(
         r"\d+(?:\.\d+)?",
@@ -429,8 +463,13 @@ def clean_price(value):
         return None
 
     try:
-        return float(match.group())
+
+        return float(
+            match.group()
+        )
+
     except Exception:
+
         return None
 
 
@@ -439,106 +478,55 @@ def clean_price(value):
 # ============================================================
 
 def extract_price(text):
+
     if not text:
         return None
 
     text = str(text)
 
-    # Normalize non-breaking spaces
-    text = text.replace("\xa0", " ")
-
     patterns = [
 
-        # ----------------------------------------------------
-        # Explicit deal price
-        # ----------------------------------------------------
-
-        r"(?:deal\s*price|deal\s*at|deal\s*@|"
-        r"deal\s*for|offer\s*price|sale\s*price|"
-        r"selling\s*price|current\s*price|"
-        r"buy\s*at|now\s*at)"
-        r"\s*[:=\-@]?\s*"
+        # Deal price
+        r"(?:deal\s*price|deal\s*at)"
+        r"\s*[:\-@]?\s*"
         r"(?:₹|rs\.?|inr)?\s*"
-        r"([\d,]+(?:\.\d+)?)\s*(?:/-)?",
+        r"([\d,]+(?:\.\d+)?)",
 
-        # ----------------------------------------------------
-        # ₹12,999 / Rs 12,999 / INR 12,999
-        # ----------------------------------------------------
+        # Offer price
+        r"(?:offer\s*price|offer)"
+        r"\s*[:\-@]?\s*"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
 
-        r"(?:₹|rs\.?|inr)\s*"
-        r"([\d,]+(?:\.\d+)?)\s*(?:/-)?",
+        # Sale price
+        r"(?:sale\s*price)"
+        r"\s*[:\-@]?\s*"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
 
-        # ----------------------------------------------------
-        # 12,999/-
-        # ----------------------------------------------------
+        # Current price
+        r"(?:current\s*price)"
+        r"\s*[:\-@]?\s*"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
 
-        r"\b([\d,]+)\s*/-",
+        # Buy at
+        r"(?:buy\s*at|now\s*at)"
+        r"\s*[:\-@]?\s*"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
 
-        # ----------------------------------------------------
-        # 12,999 only
-        # ----------------------------------------------------
+        # INR / ₹
+        r"(?:₹|rs\.?|inr)"
+        r"\s*"
+        r"([\d,]+(?:\.\d+)?)",
 
-        r"\b([\d,]+(?:\.\d+)?)\s*only\b",
+        # Price followed by /-
+        r"\b([\d,]{4,})(?:\s*/-|\s*only)\b",
 
-        # ----------------------------------------------------
-        # 12K / 12.5K
-        # ----------------------------------------------------
-
-        r"\b(\d+(?:\.\d+)?)\s*[kK]\b",
     ]
-
-    # --------------------------------------------------------
-    # Try explicit patterns first
-    # --------------------------------------------------------
 
     for pattern in patterns:
-
-        matches = re.finditer(
-            pattern,
-            text,
-            re.I,
-        )
-
-        for match in matches:
-
-            raw_price = match.group(1)
-
-            # K notation
-            if re.search(
-                r"\d+(?:\.\d+)?\s*[kK]\b",
-                match.group(0),
-                re.I,
-            ):
-
-                try:
-                    price = float(raw_price) * 1000
-                except Exception:
-                    continue
-
-            else:
-
-                price = clean_price(raw_price)
-
-            if price is None:
-                continue
-
-            if price <= 0:
-                continue
-
-            return price
-
-    # --------------------------------------------------------
-    # Fallback:
-    # Search currency values anywhere in text
-    # --------------------------------------------------------
-
-    fallback_patterns = [
-        r"₹\s*([\d,]+(?:\.\d+)?)",
-        r"\bRs\.?\s*([\d,]+(?:\.\d+)?)",
-        r"\bINR\s*([\d,]+(?:\.\d+)?)",
-    ]
-
-    for pattern in fallback_patterns:
 
         match = re.search(
             pattern,
@@ -552,17 +540,18 @@ def extract_price(text):
                 match.group(1)
             )
 
-            if price is not None and price > 0:
+            if price is not None:
                 return price
 
     return None
 
 
 # ============================================================
-# URL
+# URL RESOLUTION
 # ============================================================
 
 def resolve_url(url):
+
     if not url:
         return None
 
@@ -575,7 +564,10 @@ def resolve_url(url):
             allow_redirects=True,
         )
 
-        return response.url or url
+        return (
+            response.url
+            or url
+        )
 
     except Exception:
 
@@ -587,11 +579,20 @@ def resolve_url(url):
 # ============================================================
 
 def pricehistory_search(query):
-    encoded = quote(query)
+
+    if not query:
+        return None
+
+    encoded = quote(
+        query
+    )
 
     urls = [
+
         f"https://pricehistory.app/search?q={encoded}",
+
         f"https://pricehistoryapp.com/search?q={encoded}",
+
     ]
 
     for search_url in urls:
@@ -635,7 +636,10 @@ def pricehistory_search(query):
                     href,
                 )
 
-                if "pricehistory" in full_url.lower():
+                if (
+                    "pricehistory"
+                    in full_url.lower()
+                ):
 
                     return {
                         "title": link_text,
@@ -653,6 +657,7 @@ def pricehistory_search(query):
 # ============================================================
 
 def fetch_page(url):
+
     if not url:
         return None
 
@@ -675,10 +680,11 @@ def fetch_page(url):
 
 
 # ============================================================
-# HISTORICAL LOW
+# HISTORICAL LOW EXTRACTION
 # ============================================================
 
 def extract_historical_low(html):
+
     if not html:
         return None
 
@@ -695,23 +701,28 @@ def extract_historical_low(html):
     values = []
 
     # --------------------------------------------------------
-    # Visible text patterns
+    # Visible page text
     # --------------------------------------------------------
 
     patterns = [
 
-        r"(?:all[\s\-]*time\s*low|"
-        r"historical\s*low|"
-        r"lowest\s*price)"
-        r"\s*[:\-]?\s*"
-        r"(?:₹|rs\.?|inr)?\s*"
-        r"([\d,]+(?:\.\d+)?)",
+        (
+            r"(?:all[\s\-]*time\s*low|"
+            r"historical\s*low|"
+            r"lowest\s*price)"
+            r"\s*[:\-]?\s*"
+            r"(?:₹|rs\.?|inr)?\s*"
+            r"([\d,]+(?:\.\d+)?)"
+        ),
 
-        r'"(?:lowestPrice|lowest_price|'
-        r"historicalLow|historical_low)"'
-        r"\s*:\s*"
-        r'"?(?:₹|rs\.?|inr)?\s*'
-        r"([\d,]+(?:\.\d+)?)",
+        (
+            r"(?:lowest\s*ever|"
+            r"lowest\s*recorded)"
+            r"\s*[:\-]?\s*"
+            r"(?:₹|rs\.?|inr)?\s*"
+            r"([\d,]+(?:\.\d+)?)"
+        ),
+
     ]
 
     for pattern in patterns:
@@ -730,22 +741,23 @@ def extract_historical_low(html):
                 values.append(value)
 
     # --------------------------------------------------------
-    # Raw HTML patterns
+    # Raw HTML / JSON
     # --------------------------------------------------------
 
     raw_patterns = [
 
-        r'"lowestPrice"\s*:\s*"?(?:₹|rs\.?|inr)?'
-        r"([\d,.]+)",
+        r'"lowestPrice"\s*:\s*"?'
+        r'([\d,.]+)',
 
-        r'"lowest_price"\s*:\s*"?(?:₹|rs\.?|inr)?'
-        r"([\d,.]+)",
+        r'"lowest_price"\s*:\s*"?'
+        r'([\d,.]+)',
 
-        r'"historicalLow"\s*:\s*"?(?:₹|rs\.?|inr)?'
-        r"([\d,.]+)",
+        r'"historicalLow"\s*:\s*"?'
+        r'([\d,.]+)',
 
-        r'"historical_low"\s*:\s*"?(?:₹|rs\.?|inr)?'
-        r"([\d,.]+)",
+        r'"historical_low"\s*:\s*"?'
+        r'([\d,.]+)',
+
     ]
 
     for pattern in raw_patterns:
@@ -778,19 +790,23 @@ def suspicious_historical_low(
     historical_low,
 ):
 
-    if current_price is None:
+    if (
+        current_price is None
+        or historical_low is None
+    ):
         return False
 
-    if historical_low is None:
-        return False
-
-    # Very low historical value for expensive products
+    # Extremely low historical value
     if current_price >= 5000:
 
-        if historical_low < current_price * 0.08:
+        if historical_low < (
+            current_price * 0.08
+        ):
             return True
 
-    # Historical low below ₹100 for products above ₹2,000
+    # Example:
+    # Current ₹2000+
+    # Historical ₹50
     if current_price >= 2000:
 
         if historical_low < 100:
@@ -813,7 +829,8 @@ def compare_price(
         return {
             "status": "PRICE_UNKNOWN",
             "reason": (
-                "Deal price could not be extracted"
+                "Current deal price "
+                "could not be determined"
             ),
         }
 
@@ -822,56 +839,50 @@ def compare_price(
         return {
             "status": "HISTORICAL_LOW_UNKNOWN",
             "reason": (
-                "Verified historical low could not be found"
+                "Verified historical low "
+                "could not be found"
             ),
         }
 
-    # --------------------------------------------------------
-    # NEW LOW
-    # Equal price also counts as NEW_LOW
-    # --------------------------------------------------------
-
+    # Equal or lower = NEW LOW
     if current_price <= historical_low:
 
         return {
             "status": "NEW_LOW",
             "reason": (
-                f"Current price ₹{current_price:.0f} is at or "
-                f"below historical low ₹{historical_low:.0f}"
+                f"Current price ₹{current_price:.0f} "
+                f"is at or below historical low "
+                f"₹{historical_low:.0f}"
             ),
         }
-
-    # --------------------------------------------------------
-    # NEAR LOW
-    # --------------------------------------------------------
 
     tolerance = max(
         NEAR_LOW_MAX_RUPEES,
         historical_low * NEAR_LOW_PERCENT,
     )
 
-    difference = current_price - historical_low
+    difference = (
+        current_price
+        - historical_low
+    )
 
     if difference <= tolerance:
 
         return {
             "status": "NEAR_LOW",
             "reason": (
-                f"Current price ₹{current_price:.0f} is only "
-                f"₹{difference:.0f} above historical low "
+                f"Current price ₹{current_price:.0f} "
+                f"is within ₹{tolerance:.0f} "
+                f"of historical low "
                 f"₹{historical_low:.0f}"
             ),
         }
 
-    # --------------------------------------------------------
-    # NOT LOW
-    # --------------------------------------------------------
-
     return {
         "status": "NOT_LOW",
         "reason": (
-            f"Current price ₹{current_price:.0f} is "
-            f"₹{difference:.0f} above historical low "
+            f"Current price ₹{current_price:.0f} "
+            f"is above historical low "
             f"₹{historical_low:.0f}"
         ),
     }
@@ -891,11 +902,16 @@ def validate_deal(
 
     try:
 
-        title = (title or "").strip()
-        text = (text or "").strip()
+        title = (
+            title or ""
+        ).strip()
+
+        text = (
+            text or ""
+        ).strip()
 
         # ----------------------------------------------------
-        # TITLE CHECK
+        # TITLE
         # ----------------------------------------------------
 
         if not title:
@@ -905,21 +921,26 @@ def validate_deal(
                 "historical_low": None,
                 "category": None,
                 "reason": (
-                    "Product title is missing or empty"
+                    "Product title "
+                    "could not be determined"
                 ),
                 "source": source,
                 "url": url,
             }
 
         # ----------------------------------------------------
-        # CURRENT PRICE
+        # PRICE
         # ----------------------------------------------------
 
-        current_price = clean_price(price)
+        current_price = clean_price(
+            price
+        )
 
         if current_price is None:
 
-            current_price = extract_price(text)
+            current_price = extract_price(
+                text
+            )
 
         if current_price is None:
 
@@ -928,8 +949,9 @@ def validate_deal(
                 "historical_low": None,
                 "category": None,
                 "reason": (
-                    "Deal price could not be extracted "
-                    "from the available deal text"
+                    "Deal price could not "
+                    "be extracted from the "
+                    "available deal text"
                 ),
                 "source": source,
                 "url": url,
@@ -946,8 +968,9 @@ def validate_deal(
                 "historical_low": None,
                 "category": None,
                 "reason": (
-                    f"Price ₹{current_price:.0f} is at or below "
-                    f"minimum required price ₹{MIN_PRICE}"
+                    f"Deal price ₹{current_price:.0f} "
+                    f"is not above minimum "
+                    f"price ₹{MIN_PRICE}"
                 ),
                 "source": source,
                 "url": url,
@@ -968,18 +991,24 @@ def validate_deal(
                 "status": "CATEGORY_REJECT",
                 "historical_low": None,
                 "category": None,
-                "reason": category_result["reason"],
+                "reason": (
+                    category_result["reason"]
+                ),
                 "source": source,
                 "url": url,
             }
 
-        category = category_result["category"]
+        category = (
+            category_result["category"]
+        )
 
         # ----------------------------------------------------
         # URL
         # ----------------------------------------------------
 
-        final_url = resolve_url(url)
+        final_url = resolve_url(
+            url
+        )
 
         # ----------------------------------------------------
         # PRICEHISTORY SEARCH
@@ -1010,8 +1039,10 @@ def validate_deal(
 
             if html:
 
-                historical_low = extract_historical_low(
-                    html
+                historical_low = (
+                    extract_historical_low(
+                        html
+                    )
                 )
 
         # ----------------------------------------------------
@@ -1025,13 +1056,17 @@ def validate_deal(
                 "historical_low": None,
                 "category": category,
                 "reason": (
-                    "Verified historical low could not "
-                    "be obtained from PriceHistory"
+                    "Historical low could not "
+                    "be verified from PriceHistory"
                 ),
                 "source": source,
                 "url": final_url,
-                "pricehistory_url": pricehistory_url,
-                "pricehistory_title": pricehistory_title,
+                "pricehistory_url": (
+                    pricehistory_url
+                ),
+                "pricehistory_title": (
+                    pricehistory_title
+                ),
             }
 
         # ----------------------------------------------------
@@ -1049,13 +1084,17 @@ def validate_deal(
                 "category": category,
                 "reason": (
                     f"Historical low ₹{historical_low:.0f} "
-                    f"looks unusually low compared with "
+                    f"appears suspicious against "
                     f"current price ₹{current_price:.0f}"
                 ),
                 "source": source,
                 "url": final_url,
-                "pricehistory_url": pricehistory_url,
-                "pricehistory_title": pricehistory_title,
+                "pricehistory_url": (
+                    pricehistory_url
+                ),
+                "pricehistory_title": (
+                    pricehistory_title
+                ),
             }
 
         # ----------------------------------------------------
@@ -1074,8 +1113,12 @@ def validate_deal(
             "reason": comparison["reason"],
             "source": source,
             "url": final_url,
-            "pricehistory_url": pricehistory_url,
-            "pricehistory_title": pricehistory_title,
+            "pricehistory_url": (
+                pricehistory_url
+            ),
+            "pricehistory_title": (
+                pricehistory_title
+            ),
         }
 
     except Exception as e:
@@ -1085,7 +1128,6 @@ def validate_deal(
             "historical_low": None,
             "category": None,
             "reason": (
-                f"Validator error: "
                 f"{type(e).__name__}: {e}"
             ),
             "source": source,
@@ -1108,10 +1150,8 @@ if __name__ == "__main__":
     # Category tests
     # --------------------------------------------------------
 
-    print("\nCATEGORY TESTS")
-    print("-" * 50)
-
     tests = [
+
         "Wireless Headphones",
         "Running Shoes",
         "Office Chair",
@@ -1120,7 +1160,11 @@ if __name__ == "__main__":
         "Phone Cover",
         "Tempered Glass",
         "USB Cable",
+
     ]
+
+    print("\nCATEGORY TESTS")
+    print("-" * 50)
 
     for product in tests:
 
@@ -1136,22 +1180,29 @@ if __name__ == "__main__":
         )
 
     # --------------------------------------------------------
-    # Price extraction tests
+    # Price tests
     # --------------------------------------------------------
 
-    print("\nPRICE EXTRACTION TESTS")
-    print("-" * 50)
-
     price_tests = [
-        "Deal Price: ₹12,999",
-        "Deal @ ₹8,999",
-        "Offer Price Rs 14,999",
-        "Now at ₹7,499/-",
-        "Price: 12,999 only",
-        "Grab it for 15K",
-        "₹6,999",
-        "INR 9,999",
+
+        "Deal Price: ₹24,999",
+
+        "🔥 Deal at Rs 18,999",
+
+        "Offer Price ₹34,999",
+
+        "Now at ₹12,499",
+
+        "Buy at INR 25999",
+
+        "₹49,999 only",
+
+        "24999/-",
+
     ]
+
+    print("\nPRICE TESTS")
+    print("-" * 50)
 
     for text in price_tests:
 
@@ -1160,12 +1211,9 @@ if __name__ == "__main__":
         )
 
         print(
-            f"{text:30} -> ₹{price:.0f}"
-            if price is not None
-            else f"{text:30} -> PRICE_UNKNOWN"
+            f"{text:35} -> ₹{price}"
         )
 
     print("=" * 50)
     print("VALIDATOR TEST COMPLETE")
     print("=" * 50)
-```
