@@ -10,10 +10,11 @@
 # - Web deal scanning
 # - Duplicate URL protection
 # - Deal validation through deal_validator.py
-# - Validator handles price extraction
 # - Accepted deals -> lootersAmer
 # - Reject/error logs -> LOG_CHANNEL
 # - Persistent processed URL state
+# - Price extraction from Telegram text
+# - Price extraction fallback from product webpage
 
 import os
 import re
@@ -51,7 +52,7 @@ DESTINATION = "lootersAmer"
 
 LOG_CHANNEL = os.getenv(
     "LOG_CHANNEL",
-    ""
+    "",
 )
 
 MIN_PRICE = 1000
@@ -96,7 +97,6 @@ processed_urls = set()
 
 
 def load_state():
-
     global processed_urls
 
     if not os.path.exists(STATE_FILE):
@@ -104,21 +104,17 @@ def load_state():
         return
 
     try:
-
         with open(
             STATE_FILE,
             "r",
             encoding="utf-8",
         ) as f:
-
             data = json.load(f)
 
         if isinstance(data, list):
-
             processed_urls = set(data)
 
         elif isinstance(data, dict):
-
             processed_urls = set(
                 data.get(
                     "processed_urls",
@@ -127,24 +123,19 @@ def load_state():
             )
 
         else:
-
             processed_urls = set()
 
     except Exception:
-
         processed_urls = set()
 
 
 def save_state():
-
     try:
-
         with open(
             STATE_FILE,
             "w",
             encoding="utf-8",
         ) as f:
-
             json.dump(
                 list(processed_urls),
                 f,
@@ -153,7 +144,6 @@ def save_state():
             )
 
     except Exception as e:
-
         print(
             f"STATE SAVE ERROR: "
             f"{type(e).__name__}: {e}"
@@ -172,13 +162,12 @@ known_channels = {}
 # ============================================================
 
 URL_PATTERN = re.compile(
-    r"https?://[^\s<>\]\)]+",
+    r"https?://[^\s<>\]\)\"']+",
     re.I,
 )
 
 
 def extract_urls(text):
-
     if not text:
         return []
 
@@ -187,7 +176,6 @@ def extract_urls(text):
     cleaned = []
 
     for url in urls:
-
         url = url.rstrip(
             ".,!?;:)]}"
         )
@@ -201,71 +189,133 @@ def extract_urls(text):
 # ============================================================
 # PRICE EXTRACTION
 # ============================================================
-#
-# IMPORTANT:
-# This is only a fallback extraction.
-#
-# The final/authoritative price is now extracted by
-# deal_validator.py.
-#
-# We DO NOT reject the deal here if price is None.
-# ============================================================
 
 def extract_deal_price(text):
+    """
+    Extract price from Telegram deal text.
+
+    Examples supported:
+
+        Deal Price: ₹24,999
+        Deal Price ₹24,999
+        Deal at ₹24,999
+        Deal @ ₹24,999
+        Offer Price: ₹18,999
+        Offer: ₹18,999
+        Sale Price: ₹19,999
+        Current Price: ₹21,999
+        Buy at ₹25,999
+        Now at ₹25,999
+        ₹49,999 only
+        Rs 24,999
+        Rs. 24,999
+        INR 24,999
+        24999/-
+    """
 
     if not text:
         return None
 
+    text = str(text)
+
+    text = text.replace("\u00a0", " ")
+    text = text.replace("\u200b", "")
+    text = text.replace("\u200c", "")
+    text = text.replace("\u200d", "")
+
     patterns = [
+        # Deal Price
+        r"\bdeal\s+price\s*[:\-@]?\s*"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
 
-        # Deal price / deal at
-        r"(?:deal\s*price|deal\s*at)"
-        r"\s*[:\-@]?\s*(?:₹|rs\.?|inr)?\s*([\d,]+(?:\.\d+)?)",
+        # Deal at
+        r"\bdeal\s+at\s*[:\-@]?\s*"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
 
-        # Offer price / offer
-        r"(?:offer\s*price|offer)"
-        r"\s*[:\-@]?\s*(?:₹|rs\.?|inr)?\s*([\d,]+(?:\.\d+)?)",
+        # Deal @
+        r"\bdeal\s*@\s*"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
 
-        # Sale price
-        r"(?:sale\s*price)"
-        r"\s*[:\-@]?\s*(?:₹|rs\.?|inr)?\s*([\d,]+(?:\.\d+)?)",
+        # Offer Price
+        r"\boffer\s+price\s*[:\-@]?\s*"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
 
-        # Current price
-        r"(?:current\s*price)"
-        r"\s*[:\-@]?\s*(?:₹|rs\.?|inr)?\s*([\d,]+(?:\.\d+)?)",
+        # Offer
+        r"\boffer\s*[:\-@]?\s*"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
 
-        # Buy at / now at
-        r"(?:buy\s*at|now\s*at)"
-        r"\s*[:\-@]?\s*(?:₹|rs\.?|inr)?\s*([\d,]+(?:\.\d+)?)",
+        # Sale Price
+        r"\bsale\s+price\s*[:\-@]?\s*"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
 
-        # ₹1499 / ₹ 1,499
-        r"(?:₹|rs\.?|inr)"
-        r"\s*([\d,]+(?:\.\d+)?)",
+        # Current Price
+        r"\bcurrent\s+price\s*[:\-@]?\s*"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
 
+        # Buy at
+        r"\bbuy\s+at\s*[:\-@]?\s*"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
+
+        # Now at
+        r"\bnow\s+at\s*[:\-@]?\s*"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
+
+        # Buy now
+        r"\bbuy\s+now\s*[:\-@]?\s*"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
+
+        # ₹24,999
+        r"₹\s*([\d,]+(?:\.\d+)?)",
+
+        # Rs 24,999
+        r"\bRs\.?\s*([\d,]+(?:\.\d+)?)",
+
+        # INR 24,999
+        r"\bINR\s*([\d,]+(?:\.\d+)?)",
+
+        # 24999/-
+        r"\b([\d,]{4,})\s*/-",
+
+        # 24999 only
+        r"\b([\d,]{4,})\s+only\b",
+
+        # Price: 24999
+        r"\bprice\s*[:\-@]?\s*"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
     ]
 
     for pattern in patterns:
-
         match = re.search(
             pattern,
             text,
             re.I,
         )
 
-        if match:
+        if not match:
+            continue
 
-            try:
+        try:
+            value = match.group(1)
+            value = value.replace(",", "")
 
-                return float(
-                    match.group(1).replace(
-                        ",",
-                        "",
-                    )
-                )
+            price = float(value)
 
-            except Exception:
+            if price > 0:
+                return price
 
-                pass
+        except (ValueError, TypeError):
+            continue
 
     return None
 
@@ -275,7 +325,6 @@ def extract_deal_price(text):
 # ============================================================
 
 def extract_product_title(text):
-
     if not text:
         return "Unknown Product"
 
@@ -285,7 +334,7 @@ def extract_product_title(text):
         if x.strip()
     ]
 
-    ignored = [
+    ignored = {
         "deal",
         "offer",
         "buy now",
@@ -294,7 +343,7 @@ def extract_product_title(text):
         "limited time",
         "amazon",
         "flipkart",
-    ]
+    }
 
     for line in lines:
 
@@ -347,24 +396,12 @@ def normalize_validation_result(result):
                 "historical_low"
             ),
 
-            "current_price": result.get(
-                "current_price"
+            "reason": (
+                result.get("reason")
+                or result.get("reject_reason")
+                or result.get("message")
+                or "Validator returned no reason"
             ),
-
-            "category": result.get(
-                "category"
-            ),
-
-            "reason": result.get(
-                "reason"
-            )
-            or result.get(
-                "reject_reason"
-            )
-            or result.get(
-                "message"
-            )
-            or "Validator returned no reason",
         }
 
     if isinstance(result, tuple):
@@ -387,17 +424,9 @@ def normalize_validation_result(result):
             else "Validator returned no reason"
         )
 
-        current_price = (
-            result[3]
-            if len(result) > 3
-            else None
-        )
-
         return {
             "status": status,
             "historical_low": historical_low,
-            "current_price": current_price,
-            "category": None,
             "reason": reason,
         }
 
@@ -406,16 +435,12 @@ def normalize_validation_result(result):
         return {
             "status": result,
             "historical_low": None,
-            "current_price": None,
-            "category": None,
             "reason": "Validator returned no reason",
         }
 
     return {
         "status": "UNKNOWN",
         "historical_low": None,
-        "current_price": None,
-        "category": None,
         "reason": "Invalid validator response",
     }
 
@@ -441,7 +466,6 @@ async def send_log(message):
         return
 
     try:
-
         await client.send_message(
             LOG_CHANNEL,
             final_message,
@@ -457,14 +481,12 @@ async def send_log(message):
 
 
 async def log_info(message):
-
     await send_log(
         f"ℹ️ {message}"
     )
 
 
 async def log_error(message):
-
     await send_log(
         f"❌ ERROR: {message}"
     )
@@ -501,21 +523,9 @@ async def reject(
         f"📊 Status: {status}\n"
         f"📢 Source: {source}\n"
         f"📦 Product: {product}\n"
-        f"💰 Price: "
-        f"₹{price:.0f}"
-        if price is not None
-        else
-        "❌ REJECT\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        f"📝 Reason: {reason}\n"
-        f"📊 Status: {status}\n"
-        f"📢 Source: {source}\n"
-        f"📦 Product: {product}\n"
-        f"💰 Price: N/A"
-    )
-
-    message += (
-        f"\n🔗 URL: {url}\n"
+        f"💰 Price: ₹"
+        f"{price if price is not None else 'N/A'}\n"
+        f"🔗 URL: {url}\n"
         "━━━━━━━━━━━━━━━━━━"
     )
 
@@ -540,16 +550,9 @@ async def send_deal(
         "historical_low"
     )
 
-    category = validation.get(
-        "category"
-    )
-
     if status == "NEW_LOW":
-
         headline = "🔥 NEW ALL-TIME LOW"
-
     else:
-
         headline = "🟢 NEAR HISTORICAL LOW"
 
     message = (
@@ -563,13 +566,6 @@ async def send_deal(
         message += (
             f"📉 Historical Low: "
             f"₹{historical_low:.0f}\n"
-        )
-
-    if category:
-
-        message += (
-            f"🏷️ Category: "
-            f"{category}\n"
         )
 
     message += (
@@ -616,49 +612,47 @@ async def process_deal(
     if not text:
         return
 
-    # --------------------------------------------------------
-    # URL
-    # --------------------------------------------------------
-
     urls = extract_urls(text)
 
     if not urls:
         return
 
-    # --------------------------------------------------------
-    # PRODUCT
-    # --------------------------------------------------------
-
-    product = extract_product_title(
-        text
-    )
+    product = extract_product_title(text)
 
     # --------------------------------------------------------
-    # OPTIONAL EARLY PRICE EXTRACTION
-    # --------------------------------------------------------
-    #
-    # IMPORTANT:
-    # Do NOT reject if this returns None.
-    #
-    # Validator will perform the authoritative extraction.
+    # First attempt: Telegram text
     # --------------------------------------------------------
 
-    price = extract_deal_price(
-        text
-    )
+    price = extract_deal_price(text)
+
+    price_source = "telegram_text"
 
     # --------------------------------------------------------
-    # MINIMUM PRICE EARLY CHECK
-    # --------------------------------------------------------
-    #
-    # Only perform this if we actually found a price.
-    # Otherwise validator gets a chance to find it.
+    # If Telegram text has no price, validator will try
+    # webpage extraction from URL.
     # --------------------------------------------------------
 
-    if (
-        price is not None
-        and price <= MIN_PRICE
-    ):
+    if price is None:
+
+        await log_info(
+            f"💰 Price not found in Telegram text | "
+            f"trying webpage extraction | "
+            f"product={product}"
+        )
+
+    else:
+
+        await log_info(
+            f"💰 Price extracted from Telegram | "
+            f"₹{price:.0f} | "
+            f"product={product}"
+        )
+
+    # --------------------------------------------------------
+    # Minimum price only when we already have price
+    # --------------------------------------------------------
+
+    if price is not None and price <= MIN_PRICE:
 
         await reject(
             f"Price must be above ₹{MIN_PRICE}",
@@ -672,7 +666,7 @@ async def process_deal(
         return
 
     # --------------------------------------------------------
-    # PROCESS EACH URL
+    # Process every URL
     # --------------------------------------------------------
 
     for url in urls:
@@ -681,19 +675,6 @@ async def process_deal(
             continue
 
         try:
-
-            # ------------------------------------------------
-            # VALIDATOR
-            # ------------------------------------------------
-            #
-            # If listener extracted price:
-            #     pass it normally.
-            #
-            # If listener could NOT extract price:
-            #     pass None.
-            #
-            # Validator will then extract price from text.
-            # ------------------------------------------------
 
             validation_raw = await asyncio.to_thread(
                 validate_deal,
@@ -704,10 +685,8 @@ async def process_deal(
                 text,
             )
 
-            validation = (
-                normalize_validation_result(
-                    validation_raw
-                )
+            validation = normalize_validation_result(
+                validation_raw
             )
 
         except Exception as e:
@@ -720,36 +699,11 @@ async def process_deal(
 
             continue
 
-        # ----------------------------------------------------
-        # USE VALIDATOR PRICE
-        # ----------------------------------------------------
-
-        validated_price = validation.get(
-            "current_price"
-        )
-
-        if validated_price is not None:
-
-            try:
-
-                validated_price = float(
-                    validated_price
-                )
-
-                price = validated_price
-
-            except (
-                TypeError,
-                ValueError,
-            ):
-
-                pass
-
-        # ----------------------------------------------------
-        # VALIDATOR REJECTED
-        # ----------------------------------------------------
-
         status = validation["status"]
+
+        # ----------------------------------------------------
+        # Rejected
+        # ----------------------------------------------------
 
         if status not in (
             "NEW_LOW",
@@ -765,41 +719,10 @@ async def process_deal(
                 url,
             )
 
-            # Do not permanently mark rejected URLs.
             continue
 
         # ----------------------------------------------------
-        # SAFETY CHECK
-        # ----------------------------------------------------
-
-        if price is None:
-
-            await reject(
-                "Validator accepted deal but did not return a valid price",
-                "PRICE_UNKNOWN",
-                source,
-                product,
-                None,
-                url,
-            )
-
-            continue
-
-        if price <= MIN_PRICE:
-
-            await reject(
-                f"Price must be above ₹{MIN_PRICE}",
-                "PRICE_REJECT",
-                source,
-                product,
-                price,
-                url,
-            )
-
-            continue
-
-        # ----------------------------------------------------
-        # SEND DEAL
+        # Accepted
         # ----------------------------------------------------
 
         sent = await send_deal(
@@ -854,14 +777,17 @@ async def discover_channels():
                     None,
                 )
 
-                name = getattr(
-                    entity,
-                    "title",
-                    None,
-                ) or (
-                    f"@{username}"
-                    if username
-                    else str(channel_id)
+                name = (
+                    getattr(
+                        entity,
+                        "title",
+                        None,
+                    )
+                    or (
+                        f"@{username}"
+                        if username
+                        else str(channel_id)
+                    )
                 )
 
                 await log_info(
@@ -901,7 +827,6 @@ async def channel_refresh_loop():
             await discover_channels()
 
         except asyncio.CancelledError:
-
             raise
 
         except Exception as e:
@@ -929,7 +854,6 @@ async def heartbeat_loop():
             await log_heartbeat()
 
         except asyncio.CancelledError:
-
             raise
 
         except Exception as e:
@@ -1012,7 +936,6 @@ async def web_scan_loop():
                 )
 
         except asyncio.CancelledError:
-
             raise
 
         except Exception as e:
@@ -1225,3 +1148,809 @@ if __name__ == "__main__":
         traceback.print_exc()
 
         raise
+```
+
+### `deal_validator.py`
+
+```python
+# deal_validator.py
+# VERSION: 2.8
+
+import re
+import json
+import requests
+
+from bs4 import BeautifulSoup
+from urllib.parse import quote, urljoin
+
+
+VERSION = "2.8"
+
+
+# ============================================================
+# CONFIG
+# ============================================================
+
+MIN_PRICE = 1000
+
+NEAR_LOW_PERCENT = 0.03
+NEAR_LOW_MAX_RUPEES = 50
+
+REQUEST_TIMEOUT = 15
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/140.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-IN,en;q=0.9",
+}
+
+
+# ============================================================
+# CATEGORIES
+# ============================================================
+
+ALLOWED_CATEGORIES = [
+
+    # Electronics
+    "Smartphones",
+    "Mobile Phones",
+    "Laptops",
+    "MacBooks",
+    "Tablets",
+    "iPads",
+    "Desktop Computers",
+    "Monitors",
+    "TVs",
+    "Smart TVs",
+    "Projectors",
+    "Cameras",
+    "Camera Lenses",
+    "Gaming Consoles",
+    "Graphics Cards",
+    "GPU",
+    "Processors",
+    "CPU",
+    "Motherboards",
+    "RAM",
+    "SSD",
+    "HDD",
+    "NAS",
+    "Printers",
+    "Scanners",
+    "Routers",
+    "Wi-Fi Devices",
+    "Networking Equipment",
+    "Keyboards",
+    "Mice",
+    "Webcams",
+
+    # Audio
+    "Headphones",
+    "Earphones",
+    "TWS Earbuds",
+    "Bluetooth Speakers",
+    "Home Audio Systems",
+    "Soundbars",
+    "Amplifiers",
+    "Microphones",
+    "Audio Equipment",
+
+    # Appliances
+    "Air Conditioners",
+    "Refrigerators",
+    "Washing Machines",
+    "Dishwashers",
+    "Microwave Ovens",
+    "OTG Ovens",
+    "Air Purifiers",
+    "Vacuum Cleaners",
+    "Water Purifiers",
+    "Fans",
+    "Room Heaters",
+    "Kitchen Appliances",
+    "Coffee Machines",
+    "Electric Kettles",
+    "Induction Cooktops",
+
+    # Smart Home
+    "Smart Home Devices",
+    "Smart Lighting",
+    "Smart Switches",
+    "Smart Plugs",
+    "Security Cameras",
+    "Smart Doorbells",
+    "Home Automation Devices",
+
+    # Furniture
+    "Sofas",
+    "Beds",
+    "Mattresses",
+    "Office Chairs",
+    "Gaming Chairs",
+    "Recliners",
+    "Study Tables",
+    "Office Tables",
+    "Dining Tables",
+    "Dining Chairs",
+    "Wardrobes",
+    "Cabinets",
+    "Bookshelves",
+    "TV Units",
+    "Shoe Racks",
+    "Coffee Tables",
+    "Side Tables",
+    "Storage Furniture",
+
+    # Sports
+    "Running Shoes",
+    "Sports Shoes",
+    "Football Shoes",
+    "Cricket Bats",
+    "Cricket Equipment",
+    "Badminton Rackets",
+    "Badminton Equipment",
+    "Tennis Equipment",
+    "Basketball Equipment",
+    "Sports Bags",
+    "Gym Equipment",
+    "Dumbbells",
+    "Barbells",
+    "Weight Plates",
+    "Treadmills",
+    "Exercise Bikes",
+    "Cross Trainers",
+    "Yoga Equipment",
+    "Fitness Equipment",
+    "Cycling Equipment",
+    "Sports Accessories",
+
+    # Automotive
+    "Car Accessories",
+    "Bike Accessories",
+    "Car Electronics",
+    "Bike Electronics",
+    "Dashcams",
+    "Car Audio",
+    "Tyres",
+    "Car Care Equipment",
+    "Bike Care Equipment",
+    "Automotive Tools",
+    "Automotive Equipment",
+
+    # Tools
+    "Power Tools",
+    "Drills",
+    "Grinders",
+    "Screwdriver Sets",
+    "Tool Kits",
+    "Hand Tools",
+    "Measuring Tools",
+    "Workshop Equipment",
+    "Hardware Equipment",
+    "Welding Equipment",
+    "Professional Tools",
+
+    # Travel
+    "Trolley Bags",
+    "Suitcases",
+    "Backpacks",
+    "Duffle Bags",
+    "Travel Bags",
+    "Travel Gear",
+    "Travel Accessories",
+
+    # Outdoor
+    "Tents",
+    "Camping Gear",
+    "Trekking Equipment",
+    "Hiking Equipment",
+    "Outdoor Furniture",
+    "Outdoor Equipment",
+
+    # Home
+    "Home Utility",
+    "Home Organization",
+    "Storage Solutions",
+    "Cleaning Equipment",
+    "Kitchen Storage",
+    "Bathroom Utility",
+    "Dining & Serving",
+    "Home Improvement Equipment",
+
+    # Kids
+    "Premium Toys",
+    "Building Sets",
+    "Construction Sets",
+    "Educational Toys",
+    "Kids Ride-ons",
+    "Kids Equipment",
+    "Learning Devices",
+
+    # Pets
+    "Pet Beds",
+    "Pet Feeders",
+    "Pet Grooming Equipment",
+    "Pet Travel Equipment",
+    "Pet Accessories",
+
+    # Garden
+    "Gardening Tools",
+    "Garden Equipment",
+    "Planters",
+    "Outdoor Storage",
+
+    # Books / Education
+    "Books",
+    "Educational Equipment",
+    "Study Equipment",
+    "Educational Devices",
+
+    # Personal Care Devices
+    "Trimmers",
+    "Shavers",
+    "Hair Dryers",
+    "Hair Straighteners",
+    "Hair Styling Appliances",
+    "Electric Grooming Devices",
+    "Electric Personal Care Devices",
+
+    # Professional
+    "Professional Equipment",
+    "Industrial Equipment",
+    "Commercial Equipment",
+    "Testing Equipment",
+]
+
+
+# ============================================================
+# EXCLUDED KEYWORDS
+# ============================================================
+
+EXCLUDED_KEYWORDS = [
+    "phone cover",
+    "phone case",
+    "mobile cover",
+    "mobile case",
+    "back cover",
+    "screen protector",
+    "tempered glass",
+    "charging cable",
+    "usb cable",
+    "data cable",
+    "aux cable",
+    "hdmi cable",
+    "charger",
+    "adapter",
+    "small watch",
+    "smart band",
+    "fitness band",
+    "jewellery",
+    "jewelry",
+    "clothing",
+    "clothes",
+    "fashion",
+    "saree",
+    "shirt",
+    "t shirt",
+    "jeans",
+    "trousers",
+    "dress",
+    "cosmetic",
+    "makeup",
+    "grocery",
+    "food",
+    "daily consumable",
+]
+
+
+# ============================================================
+# TEXT NORMALIZATION
+# ============================================================
+
+def normalize(text):
+
+    if not text:
+        return ""
+
+    text = str(text).lower()
+
+    text = text.replace(
+        "&",
+        " and ",
+    )
+
+    text = text.replace(
+        "/",
+        " ",
+    )
+
+    text = text.replace(
+        "-",
+        " ",
+    )
+
+    text = re.sub(
+        r"[^a-z0-9\s]",
+        " ",
+        text,
+    )
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text,
+    )
+
+    return text.strip()
+
+
+# ============================================================
+# CATEGORY MATCH
+# ============================================================
+
+def category_match(
+    product_text,
+    category,
+):
+
+    product = normalize(
+        product_text
+    )
+
+    cat = normalize(
+        category
+    )
+
+    if not product or not cat:
+        return False
+
+    if cat in product:
+        return True
+
+    product_words = set(
+        product.split()
+    )
+
+    category_words = set(
+        cat.split()
+    )
+
+    if len(category_words) == 1:
+
+        return bool(
+            product_words.intersection(
+                category_words
+            )
+        )
+
+    return category_words.issubset(
+        product_words
+    )
+
+
+# ============================================================
+# CLASSIFY PRODUCT
+# ============================================================
+
+def classify_product(
+    title,
+    extra_text="",
+):
+
+    combined = normalize(
+        f"{title} {extra_text}"
+    )
+
+    for keyword in EXCLUDED_KEYWORDS:
+
+        if normalize(keyword) in combined:
+
+            return {
+                "matched": False,
+                "category": None,
+                "reason": (
+                    f"Excluded product type: "
+                    f"{keyword}"
+                ),
+            }
+
+    for category in ALLOWED_CATEGORIES:
+
+        if category_match(
+            combined,
+            category,
+        ):
+
+            return {
+                "matched": True,
+                "category": category,
+                "reason": (
+                    f"Matched category: "
+                    f"{category}"
+                ),
+            }
+
+    return {
+        "matched": False,
+        "category": None,
+        "reason": (
+            "Product category is outside "
+            "configured deal categories"
+        ),
+    }
+
+
+# ============================================================
+# PRICE CLEANING
+# ============================================================
+
+def clean_price(value):
+
+    if value is None:
+        return None
+
+    value = str(value).strip()
+
+    value = value.replace(
+        ",",
+        "",
+    )
+
+    value = value.replace(
+        "₹",
+        "",
+    )
+
+    value = re.sub(
+        r"\bRs\.?\s*",
+        "",
+        value,
+        flags=re.I,
+    )
+
+    value = re.sub(
+        r"\bINR\s*",
+        "",
+        value,
+        flags=re.I,
+    )
+
+    match = re.search(
+        r"\d+(?:\.\d+)?",
+        value,
+    )
+
+    if not match:
+        return None
+
+    try:
+
+        price = float(
+            match.group()
+        )
+
+        if price <= 0:
+            return None
+
+        return price
+
+    except Exception:
+        return None
+
+
+# ============================================================
+# PRICE EXTRACTION FROM TEXT
+# ============================================================
+
+def extract_price(text):
+
+    if not text:
+        return None
+
+    text = str(text)
+
+    text = text.replace(
+        "\u00a0",
+        " ",
+    )
+
+    text = text.replace(
+        "\u200b",
+        "",
+    )
+
+    text = text.replace(
+        "\u200c",
+        "",
+    )
+
+    text = text.replace(
+        "\u200d",
+        "",
+    )
+
+    patterns = [
+
+        # Deal Price
+        r"\bdeal\s+price\s*[:\-@]?\s*"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
+
+        # Deal at
+        r"\bdeal\s+at\s*[:\-@]?\s*"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
+
+        # Deal @
+        r"\bdeal\s*@\s*"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
+
+        # Offer Price
+        r"\boffer\s+price\s*[:\-@]?\s*"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
+
+        # Offer
+        r"\boffer\s*[:\-@]?\s*"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
+
+        # Sale Price
+        r"\bsale\s+price\s*[:\-@]?\s*"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
+
+        # Current Price
+        r"\bcurrent\s+price\s*[:\-@]?\s*"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
+
+        # Buy at
+        r"\bbuy\s+at\s*[:\-@]?\s*"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
+
+        # Now at
+        r"\bnow\s+at\s*[:\-@]?\s*"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
+
+        # ₹24,999
+        r"₹\s*([\d,]+(?:\.\d+)?)",
+
+        # Rs 24,999
+        r"\bRs\.?\s*([\d,]+(?:\.\d+)?)",
+
+        # INR 24,999
+        r"\bINR\s*([\d,]+(?:\.\d+)?)",
+
+        # 24999/-
+        r"\b([\d,]{4,})\s*/-",
+
+        # 24999 only
+        r"\b([\d,]{4,})\s+only\b",
+
+        # Price: 24999
+        r"\bprice\s*[:\-@]?\s*"
+        r"(?:₹|rs\.?|inr)?\s*"
+        r"([\d,]+(?:\.\d+)?)",
+    ]
+
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
+            text,
+            re.I,
+        )
+
+        if not match:
+            continue
+
+        price = clean_price(
+            match.group(1)
+        )
+
+        if price is not None:
+            return price
+
+    return None
+
+
+# ============================================================
+# URL RESOLUTION
+# ============================================================
+
+def resolve_url(url):
+
+    if not url:
+        return None
+
+    try:
+
+        response = requests.get(
+            url,
+            headers=HEADERS,
+            timeout=REQUEST_TIMEOUT,
+            allow_redirects=True,
+        )
+
+        return (
+            response.url
+            or url
+        )
+
+    except Exception:
+
+        return url
+
+
+# ============================================================
+# FETCH PAGE
+# ============================================================
+
+def fetch_page(url):
+
+    if not url:
+        return None
+
+    try:
+
+        response = requests.get(
+            url,
+            headers=HEADERS,
+            timeout=REQUEST_TIMEOUT,
+            allow_redirects=True,
+        )
+
+        if response.status_code != 200:
+            return None
+
+        return response.text
+
+    except Exception:
+
+        return None
+
+
+# ============================================================
+# EXTRACT PRICE FROM JSON-LD
+# ============================================================
+
+def extract_jsonld_price(soup):
+
+    if not soup:
+        return None
+
+    scripts = soup.find_all(
+        "script",
+        type="application/ld+json",
+    )
+
+    for script in scripts:
+
+        raw = script.string or script.get_text(
+            strip=True
+        )
+
+        if not raw:
+            continue
+
+        try:
+
+            data = json.loads(raw)
+
+        except Exception:
+
+            continue
+
+        objects = []
+
+        if isinstance(data, list):
+            objects.extend(data)
+
+        elif isinstance(data, dict):
+
+            objects.append(data)
+
+            graph = data.get("@graph")
+
+            if isinstance(graph, list):
+                objects.extend(graph)
+
+        for obj in objects:
+
+            if not isinstance(
+                obj,
+                dict,
+            ):
+                continue
+
+            offers = obj.get(
+                "offers"
+            )
+
+            if isinstance(
+                offers,
+                dict,
+            ):
+
+                price = clean_price(
+                    offers.get("price")
+                )
+
+                if price is not None:
+                    return price
+
+            elif isinstance(
+                offers,
+                list,
+            ):
+
+                for offer in offers:
+
+                    if not isinstance(
+                        offer,
+                        dict,
+                    ):
+                        continue
+
+                    price = clean_price(
+                        offer.get("price")
+                    )
+
+                    if price is not None:
+                        return price
+
+            price = clean_price(
+                obj.get("price")
+            )
+
+            if price is not None:
+                return price
+
+    return None
+
+
+# ============================================================
+# EXTRACT WEBPAGE PRICE
+# ============================================================
+
+def extract_webpage_price(html):
+
+    if not html:
+        return None
+
+    soup = BeautifulSoup(
+        html,
+        "html.parser",
+    )
+
+    # --------------------------------------------------------
+    # 1. JSON-LD structured data
+    # --------------------------------------------------------
+
+    price = extract_jsonld_price(
+        soup
+    )
+
+    if price is not None:
+        return price
+
+    # --------------------------------------------------------
+    # 2. Meta tags
+    # --------------------------------------------------------
+
+    meta_selectors = [
+        {
+            "property": "product:price:amount"
+        },
+        {
+            "property": "og:price:amount"
+        },
+        {
+            "name": "product:pr
