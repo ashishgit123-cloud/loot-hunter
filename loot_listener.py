@@ -1,5 +1,5 @@
 # loot_listener.py
-# VERSION: 2.8
+# VERSION: 2.9
 
 import os
 import re
@@ -20,7 +20,7 @@ from deal_sources import get_all_web_deals
 # VERSION
 # ============================================================
 
-VERSION = "2.8"
+VERSION = "2.9"
 
 
 # ============================================================
@@ -113,6 +113,10 @@ def load_state():
         else:
             processed_urls = set()
 
+        print(
+            f"STATE LOADED | processed={len(processed_urls)}"
+        )
+
     except Exception as e:
         print(
             "STATE LOAD ERROR:",
@@ -188,19 +192,18 @@ def extract_deal_price(text):
     """
     Extract price from Telegram message.
 
-    Supports examples like:
-
-    ₹24,999
-    Rs 24,999
-    Rs. 24,999
-    INR 24999
-    Deal Price: ₹24,999
-    Deal at ₹18,999
-    Offer Price: 34999
-    Now at 12999
-    Buy at 25999
-    24999/-
-    24999 only
+    Examples:
+        ₹24,999
+        Rs 24,999
+        Rs. 24,999
+        INR 24999
+        Deal Price: ₹24,999
+        Deal at ₹18,999
+        Offer Price: 34999
+        Now at 12999
+        Buy at 25999
+        24999/-
+        24999 only
     """
 
     if not text:
@@ -209,52 +212,65 @@ def extract_deal_price(text):
     text = str(text)
 
     patterns = [
+        # Deal Price / Deal At
+        (
+            r"(?:deal\s*price|deal\s*at)"
+            r"\s*[:\-@]?\s*"
+            r"(?:₹|rs\.?|inr)?\s*"
+            r"([\d,]+(?:\.\d+)?)"
+        ),
 
-        # Deal Price
-        r"(?:deal\s*price|deal\s*at)"
-        r"\s*[:\-@]?\s*"
-        r"(?:₹|rs\.?|inr)?\s*"
-        r"([\d,]+(?:\.\d+)?)",
-
-        # Offer Price
-        r"(?:offer\s*price|offer)"
-        r"\s*[:\-@]?\s*"
-        r"(?:₹|rs\.?|inr)?\s*"
-        r"([\d,]+(?:\.\d+)?)",
+        # Offer Price / Offer
+        (
+            r"(?:offer\s*price|offer)"
+            r"\s*[:\-@]?\s*"
+            r"(?:₹|rs\.?|inr)?\s*"
+            r"([\d,]+(?:\.\d+)?)"
+        ),
 
         # Sale Price
-        r"(?:sale\s*price)"
-        r"\s*[:\-@]?\s*"
-        r"(?:₹|rs\.?|inr)?\s*"
-        r"([\d,]+(?:\.\d+)?)",
+        (
+            r"(?:sale\s*price)"
+            r"\s*[:\-@]?\s*"
+            r"(?:₹|rs\.?|inr)?\s*"
+            r"([\d,]+(?:\.\d+)?)"
+        ),
 
         # Current Price
-        r"(?:current\s*price)"
-        r"\s*[:\-@]?\s*"
-        r"(?:₹|rs\.?|inr)?\s*"
-        r"([\d,]+(?:\.\d+)?)",
+        (
+            r"(?:current\s*price)"
+            r"\s*[:\-@]?\s*"
+            r"(?:₹|rs\.?|inr)?\s*"
+            r"([\d,]+(?:\.\d+)?)"
+        ),
 
-        # Buy at / Now at
-        r"(?:buy\s*at|now\s*at)"
-        r"\s*[:\-@]?\s*"
-        r"(?:₹|rs\.?|inr)?\s*"
-        r"([\d,]+(?:\.\d+)?)",
+        # Buy At / Now At
+        (
+            r"(?:buy\s*at|now\s*at)"
+            r"\s*[:\-@]?\s*"
+            r"(?:₹|rs\.?|inr)?\s*"
+            r"([\d,]+(?:\.\d+)?)"
+        ),
 
         # Explicit currency
-        r"(?:₹|rs\.?|inr)"
-        r"\s*"
-        r"([\d,]+(?:\.\d+)?)",
+        (
+            r"(?:₹|rs\.?|inr)"
+            r"\s*"
+            r"([\d,]+(?:\.\d+)?)"
+        ),
 
-        # Number followed by /-
-        r"\b([\d,]{4,})\s*/-",
+        # 24999/-
+        (
+            r"\b([\d,]{4,})\s*/-"
+        ),
 
-        # Number followed by only
-        r"\b([\d,]{4,})\s+only\b",
-
+        # 24999 only
+        (
+            r"\b([\d,]{4,})\s+only\b"
+        ),
     ]
 
     for pattern in patterns:
-
         match = re.search(
             pattern,
             text,
@@ -266,13 +282,12 @@ def extract_deal_price(text):
 
         try:
             value = match.group(1)
+            value = value.replace(",", "")
 
-            value = value.replace(
-                ",",
-                "",
-            )
+            price = float(value)
 
-            return float(value)
+            if price > 0:
+                return price
 
         except Exception:
             continue
@@ -285,7 +300,6 @@ def extract_deal_price(text):
 # ============================================================
 
 def extract_product_title(text):
-
     if not text:
         return "Unknown Product"
 
@@ -307,7 +321,6 @@ def extract_product_title(text):
     }
 
     for line in lines:
-
         if len(line) < 4:
             continue
 
@@ -343,27 +356,55 @@ def extract_product_title(text):
 # ============================================================
 
 def normalize_validation_result(result):
+    """
+    Normalize validator response while preserving
+    current_price, category and other useful fields.
+    """
 
     if isinstance(result, dict):
-
         return {
             "status": result.get(
                 "status",
                 "UNKNOWN",
             ),
+
+            "current_price": result.get(
+                "current_price"
+            ),
+
             "historical_low": result.get(
                 "historical_low"
             ),
+
+            "category": result.get(
+                "category"
+            ),
+
             "reason": (
                 result.get("reason")
                 or result.get("reject_reason")
                 or result.get("message")
                 or "Validator returned no reason"
             ),
+
+            "source": result.get(
+                "source"
+            ),
+
+            "url": result.get(
+                "url"
+            ),
+
+            "pricehistory_url": result.get(
+                "pricehistory_url"
+            ),
+
+            "pricehistory_title": result.get(
+                "pricehistory_title"
+            ),
         }
 
     if isinstance(result, tuple):
-
         status = (
             result[0]
             if len(result) > 0
@@ -382,23 +423,34 @@ def normalize_validation_result(result):
             else "Validator returned no reason"
         )
 
+        current_price = (
+            result[3]
+            if len(result) > 3
+            else None
+        )
+
         return {
             "status": status,
+            "current_price": current_price,
             "historical_low": historical_low,
+            "category": None,
             "reason": reason,
         }
 
     if isinstance(result, str):
-
         return {
             "status": result,
+            "current_price": None,
             "historical_low": None,
+            "category": None,
             "reason": "Validator returned no reason",
         }
 
     return {
         "status": "UNKNOWN",
+        "current_price": None,
         "historical_low": None,
+        "category": None,
         "reason": "Invalid validator response",
     }
 
@@ -408,7 +460,6 @@ def normalize_validation_result(result):
 # ============================================================
 
 async def send_log(message):
-
     timestamp = datetime.now().strftime(
         "%Y-%m-%d %H:%M:%S"
     )
@@ -449,7 +500,6 @@ async def log_error(message):
 
 
 async def log_heartbeat():
-
     await send_log(
         "💓 HEARTBEAT | "
         f"version={VERSION} | "
@@ -471,7 +521,6 @@ async def reject(
     price,
     url,
 ):
-
     message = (
         "❌ REJECT\n"
         "━━━━━━━━━━━━━━━━━━\n"
@@ -499,7 +548,6 @@ async def send_deal(
     source,
     validation,
 ):
-
     status = validation.get(
         "status",
         "UNKNOWN",
@@ -521,7 +569,6 @@ async def send_deal(
     )
 
     if historical_low is not None:
-
         message += (
             f"📉 Historical Low: "
             f"₹{historical_low:.0f}\n"
@@ -533,14 +580,13 @@ async def send_deal(
     )
 
     try:
-
         await client.send_message(
             DESTINATION,
             message,
         )
 
         await log_info(
-            f"✅ ACCEPTED | "
+            "✅ ACCEPTED | "
             f"{status} | "
             f"{product} | "
             f"₹{price:.0f} | "
@@ -550,7 +596,6 @@ async def send_deal(
         return True
 
     except Exception as e:
-
         await log_error(
             "Destination send failed: "
             f"{type(e).__name__}: {e}"
@@ -567,7 +612,6 @@ async def process_deal(
     text,
     source,
 ):
-
     if not text:
         return
 
@@ -579,24 +623,23 @@ async def process_deal(
     product = extract_product_title(text)
 
     # --------------------------------------------------------
-    # Try local Telegram-text price first
+    # Local Telegram price
     # --------------------------------------------------------
 
     price = extract_deal_price(text)
 
-    # --------------------------------------------------------
-    # IMPORTANT:
-    # Do NOT immediately reject if price is missing.
-    #
-    # Pass None to validator so validator can attempt
-    # its own price extraction / web recovery.
-    # --------------------------------------------------------
+    if price is not None:
+        await log_info(
+            "💰 PRICE FOUND IN MESSAGE | "
+            f"price=₹{price:.0f} | "
+            f"product={product} | "
+            f"source={source}"
+        )
 
-    if price is None:
-
+    else:
         await log_info(
             "💰 PRICE NOT FOUND IN MESSAGE | "
-            f"Sending to validator/web recovery | "
+            "Sending to validator/web recovery | "
             f"product={product} | "
             f"source={source}"
         )
@@ -608,10 +651,19 @@ async def process_deal(
     for url in urls:
 
         if url in processed_urls:
+            await log_info(
+                f"⏭️ SKIPPED PROCESSED URL | {url}"
+            )
             continue
 
-        try:
+        await log_info(
+            "🔎 PROCESSING URL | "
+            f"url={url} | "
+            f"product={product} | "
+            f"message_price={price}"
+        )
 
+        try:
             validation_raw = await asyncio.to_thread(
                 validate_deal,
                 product,
@@ -626,18 +678,42 @@ async def process_deal(
             )
 
         except Exception as e:
-
             await log_error(
                 "Validator exception | "
                 f"{type(e).__name__}: {e}\n"
                 f"{traceback.format_exc()}"
             )
-
             continue
 
         status = validation.get(
             "status",
             "UNKNOWN",
+        )
+
+        recovered_price = validation.get(
+            "current_price"
+        )
+
+        historical_low = validation.get(
+            "historical_low"
+        )
+
+        reason = validation.get(
+            "reason",
+            "No reason returned",
+        )
+
+        # ----------------------------------------------------
+        # Detailed validator debug
+        # ----------------------------------------------------
+
+        await log_info(
+            "🧪 VALIDATOR RESULT | "
+            f"status={status} | "
+            f"message_price={price} | "
+            f"recovered_price={recovered_price} | "
+            f"historical_low={historical_low} | "
+            f"reason={reason}"
         )
 
         # ----------------------------------------------------
@@ -648,19 +724,12 @@ async def process_deal(
             "NEW_LOW",
             "NEAR_LOW",
         ):
-
             final_price = price
 
-            # Validator may have recovered price
-            # and returned it in the result.
             if final_price is None:
-
-                final_price = validation.get(
-                    "current_price"
-                )
+                final_price = recovered_price
 
             if final_price is None:
-
                 await reject(
                     "Validator approved status but "
                     "current price was not returned",
@@ -670,7 +739,6 @@ async def process_deal(
                     None,
                     url,
                 )
-
                 continue
 
             sent = await send_deal(
@@ -682,9 +750,7 @@ async def process_deal(
             )
 
             if sent:
-
                 processed_urls.add(url)
-
                 save_state()
 
             continue
@@ -694,18 +760,15 @@ async def process_deal(
         # ----------------------------------------------------
 
         await reject(
-            validation.get(
-                "reason",
-                "Validator rejected deal",
-            ),
+            reason,
             status,
             source,
             product,
-            price,
+            price if price is not None else recovered_price,
             url,
         )
 
-        # Rejected URLs are NOT permanently processed.
+        # Rejected URLs are intentionally NOT saved.
 
 
 # ============================================================
@@ -713,15 +776,12 @@ async def process_deal(
 # ============================================================
 
 async def discover_channels():
-
     try:
-
         dialogs = await client.get_dialogs()
 
         new_channels = 0
 
         for dialog in dialogs:
-
             entity = dialog.entity
 
             if not getattr(
@@ -745,16 +805,17 @@ async def discover_channels():
                 None,
             )
 
-            name = (
-                f"@{username}"
-                if username
-                else getattr(
-                    entity,
-                    "title",
-                    None,
+            if username:
+                name = f"@{username}"
+            else:
+                name = (
+                    getattr(
+                        entity,
+                        "title",
+                        None,
+                    )
+                    or str(channel_id)
                 )
-                or str(channel_id)
-            )
 
             await log_info(
                 "📢 NEW CHANNEL DISCOVERED: "
@@ -762,14 +823,12 @@ async def discover_channels():
             )
 
         if new_channels:
-
             await log_info(
                 "📡 Channel discovery complete | "
                 f"total={len(known_channels)}"
             )
 
     except Exception as e:
-
         await log_error(
             "Channel discovery failed: "
             f"{type(e).__name__}: {e}"
@@ -781,11 +840,8 @@ async def discover_channels():
 # ============================================================
 
 async def channel_refresh_loop():
-
     while True:
-
         try:
-
             await asyncio.sleep(
                 CHANNEL_REFRESH_SECONDS
             )
@@ -796,7 +852,6 @@ async def channel_refresh_loop():
             raise
 
         except Exception as e:
-
             await log_error(
                 "Channel refresh error: "
                 f"{type(e).__name__}: {e}"
@@ -808,11 +863,8 @@ async def channel_refresh_loop():
 # ============================================================
 
 async def heartbeat_loop():
-
     while True:
-
         try:
-
             await asyncio.sleep(
                 HEARTBEAT_SECONDS
             )
@@ -823,11 +875,10 @@ async def heartbeat_loop():
             raise
 
         except Exception as e:
-
             print(
                 "HEARTBEAT ERROR:",
                 type(e).__name__,
-                e,
+                str(e),
             )
 
 
@@ -836,11 +887,8 @@ async def heartbeat_loop():
 # ============================================================
 
 async def web_scan_loop():
-
     while True:
-
         try:
-
             await asyncio.sleep(
                 WEB_SCAN_SECONDS
             )
@@ -854,12 +902,10 @@ async def web_scan_loop():
             )
 
             if not candidates:
-
                 await log_info(
                     "🌐 WEB SCAN COMPLETE | "
                     "candidates=0"
                 )
-
                 continue
 
             await log_info(
@@ -890,7 +936,6 @@ async def web_scan_loop():
                 )
 
                 if url and url not in text:
-
                     text = (
                         f"{text}\n"
                         f"{url}"
@@ -905,7 +950,6 @@ async def web_scan_loop():
             raise
 
         except Exception as e:
-
             await log_error(
                 "Web scan error: "
                 f"{type(e).__name__}: {e}"
@@ -918,9 +962,7 @@ async def web_scan_loop():
 
 @client.on(events.NewMessage)
 async def new_message_handler(event):
-
     try:
-
         chat = await event.get_chat()
 
         if not getattr(
@@ -937,11 +979,8 @@ async def new_message_handler(event):
         )
 
         if username:
-
             source = f"@{username}"
-
         else:
-
             source = getattr(
                 chat,
                 "title",
@@ -956,7 +995,6 @@ async def new_message_handler(event):
         )
 
     except Exception as e:
-
         await log_error(
             "NewMessage handler error: "
             f"{type(e).__name__}: {e}"
@@ -969,9 +1007,7 @@ async def new_message_handler(event):
 
 @client.on(events.MessageEdited)
 async def edited_message_handler(event):
-
     try:
-
         chat = await event.get_chat()
 
         if not getattr(
@@ -988,11 +1024,8 @@ async def edited_message_handler(event):
         )
 
         if username:
-
             source = f"@{username}"
-
         else:
-
             source = getattr(
                 chat,
                 "title",
@@ -1007,7 +1040,6 @@ async def edited_message_handler(event):
         )
 
     except Exception as e:
-
         await log_error(
             "MessageEdited handler error: "
             f"{type(e).__name__}: {e}"
@@ -1019,7 +1051,6 @@ async def edited_message_handler(event):
 # ============================================================
 
 async def main():
-
     load_state()
 
     print(
@@ -1037,11 +1068,8 @@ async def main():
     )
 
     if username:
-
         display_name = f"@{username}"
-
     else:
-
         display_name = getattr(
             me,
             "first_name",
@@ -1073,11 +1101,9 @@ async def main():
     ]
 
     try:
-
         await client.run_until_disconnected()
 
     finally:
-
         for task in tasks:
             task.cancel()
 
@@ -1092,21 +1118,17 @@ async def main():
 # ============================================================
 
 if __name__ == "__main__":
-
     try:
-
         asyncio.run(
             main()
         )
 
     except KeyboardInterrupt:
-
         print(
             "🛑 Loot Hunter stopped"
         )
 
     except Exception as e:
-
         print(
             "FATAL ERROR:",
             type(e).__name__,
@@ -1114,5 +1136,4 @@ if __name__ == "__main__":
         )
 
         traceback.print_exc()
-
         raise
