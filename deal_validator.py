@@ -22,10 +22,7 @@ async def validate_deal(
 ) -> Evaluation:
     original = url
 
-    final = await asyncio.to_thread(
-        resolve_url,
-        url,
-    )
+    final = await asyncio.to_thread(resolve_url, url)
 
     if not final:
         return Evaluation(
@@ -43,8 +40,7 @@ async def validate_deal(
             evidence=[],
         )
 
-    canonical = canonical_url(final)
-    store = store_for(canonical or final)
+    store = store_for(final)
 
     if not store:
         return Evaluation(
@@ -60,8 +56,31 @@ async def validate_deal(
                 text,
             ),
             evidence=[],
-            canonical_url=canonical,
+            canonical_url=None,
             store=None,
+        )
+
+    canonical = canonical_url(final)
+
+    if not canonical:
+        return Evaluation(
+            verdict=Verdict.UNKNOWN,
+            confidence=0.0,
+            score=None,
+            reason=(
+                "Supported retailer detected, "
+                "but product URL could not be canonicalized."
+            ),
+            offer=Offer(
+                title,
+                price,
+                original,
+                source,
+                text,
+            ),
+            evidence=[],
+            canonical_url=None,
+            store=store,
         )
 
     if price is None or price <= 0:
@@ -82,33 +101,16 @@ async def validate_deal(
             store=store,
         )
 
-    raw = await gather_evidence(
-        canonical
-    )
+    raw = await gather_evidence(canonical)
 
     evidence = [
         Evidence(
-            provider=item.get(
-                "provider",
-                "unknown",
-            ),
-            kind=item.get(
-                "kind",
-                "unknown",
-            ),
-            price=item.get(
-                "price"
-            ),
-            historical_low=item.get(
-                "historical_low"
-            ),
-            url=item.get(
-                "url"
-            ),
-            confidence=item.get(
-                "confidence",
-                0,
-            ),
+            provider=item.get("provider", "unknown"),
+            kind=item.get("kind", "unknown"),
+            price=item.get("price"),
+            historical_low=item.get("historical_low"),
+            url=item.get("url"),
+            confidence=item.get("confidence", 0.0),
         )
         for item in raw
     ]
