@@ -578,7 +578,7 @@ def extract_history(html: str) -> dict:
             r'"(?:lowestPrice|lowest_price|'
             r"historicalLow|historical_low|"
             r"allTimeLow|all_time_low|"
-            r"minPrice|min_price)"'
+            r"minPrice|min_price)"
             r'\s*:\s*"?(?P<p>[\d,.]+)'
         ),
     ]
