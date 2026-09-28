@@ -20,14 +20,24 @@ def evaluate(
     """
     warnings = []
 
-    if not offer.price or offer.price <= 0:
+    # Fallback: Agar Telegram offer price missing ya 0 hai, 
+    # lekin evidence mein retailer_page ka price mil gaya hai, toh use offer price maan lo.
+    current_price = offer.price
+    if not current_price or current_price <= 0:
+        for e in evidence:
+            if e.provider == "retailer_page" and e.price and e.price > 0:
+                current_price = e.price
+                warnings.append("Telegram price missing tha, isliye retailer web page ke price ko offer price mana gaya hai.")
+                break
+
+    if not current_price or current_price <= 0:
         return Evaluation(
             Verdict.UNKNOWN, 0.0, None,
             "Current payable price is unknown.",
             offer, evidence, ["No reliable current price."],
         )
 
-    current = offer.price
+    current = current_price
     current_refs = [
         e.price for e in evidence
         if e.price and e.price > 0
