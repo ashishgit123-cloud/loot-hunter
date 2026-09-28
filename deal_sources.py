@@ -1,12 +1,25 @@
+"""
+Price/evidence providers.
+
+Important:
+- Providers return evidence; they do NOT decide whether a Telegram post is a deal.
+- Add licensed APIs here when available.
+- Do not depend on undocumented/private endpoints.
+"""
+
+from __future__ import annotations
+import asyncio
 import re
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Optional
+from urllib.parse import quote, urlparse
+
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin
 
-
-# =========================================================
-# CONFIG
-# =========================================================
+TIMEOUT = 12
+MIN_PRICE = 1000
 
 HEADERS = {
     "User-Agent": (
@@ -14,583 +27,232 @@ HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/140.0 Safari/537.36"
     ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-IN,en;q=0.9",
 }
 
-TIMEOUT = 20
-
-SOURCE_URLS = {
-    "PriceHistory Deals": "https://pricehistory.app/deals",
-    "PriceHistory Drops": "https://pricehistory.app/price-drop",
-    "PriceTrail": "https://www.pricehistorytracker.in/",
-    "Buyhatke": "https://www.buyhatke.com/deals",
-}
-
-session = requests.Session()
-session.headers.update(HEADERS)
+AMAZON = {"amazon.in", "amazon.com"}
+FLIPKART = {"flipkart.com"}
+SHORT_AMAZON = {"amzn.to"}
+SHORT_FLIPKART = {"fkrt.co", "fkrt.cc"}
 
 
-# =========================================================
-# COMMON HELPERS
-# =========================================================
-
-def clean_text(value):
-    if not value:
+def domain(url: str) -> str:
+    try:
+        d = urlparse(url).netloc.lower().split("@")[-1].split(":")[0]
+        return d[4:] if d.startswith("www.") else d
+    except Exception:
         return ""
 
-    return re.sub(
-        r"\s+",
-        " ",
-        value
-    ).strip()
 
-
-def extract_price(text):
-    if not text:
-        return None
-
-    patterns = [
-        r"(?:Price|Offer Price|Current Price)\s*[:\-]?\s*₹\s*([\d,]+)",
-        r"₹\s*([\d,]+)",
-        r"(?:Rs\.?|INR)\s*([\d,]+)",
-    ]
-
-    for pattern in patterns:
-
-        matches = re.findall(
-            pattern,
-            text,
-            flags=re.IGNORECASE
-        )
-
-        for value in matches:
-
-            try:
-                price = int(
-                    value.replace(",", "")
-                )
-
-                if price > 0:
-                    return price
-
-            except Exception:
-                pass
-
+def store_for(url: str) -> Optional[str]:
+    d = domain(url)
+    if d in AMAZON or any(d.endswith("." + x) for x in AMAZON):
+        return "amazon"
+    if d in FLIPKART or any(d.endswith("." + x) for x in FLIPKART):
+        return "flipkart"
     return None
 
 
-def extract_urls(text):
-    if not text:
-        return []
-
-    urls = re.findall(
-        r"https?://[^\s<>\"]+",
-        text,
-        flags=re.IGNORECASE
-    )
-
-    result = []
-
-    for url in urls:
-
-        url = url.rstrip(
-            ".,);]}>'\""
-        )
-
-        if url not in result:
-            result.append(url)
-
-    return result
+def clean_price(value) -> Optional[float]:
+    if value is None:
+        return None
+    m = re.search(r"\d+(?:,\d{2,3})*(?:\.\d+)?", str(value).replace("₹", ""))
+    if not m:
+        return None
+    try:
+        p = float(m.group(0).replace(",", ""))
+        return p if p > 0 else None
+    except ValueError:
+        return None
 
 
-def is_product_url(url):
+def resolve_url(url: str) -> Optional[str]:
     if not url:
-        return False
-
-    low = url.lower()
-
-    allowed_domains = (
-        "amazon.in",
-        "amazon.com",
-        "flipkart.com",
-        "myntra.com",
-        "croma.com",
-        "reliancedigital.in",
-        "tatacliq.com",
-        "nykaa.com",
-    )
-
-    return any(
-        domain in low
-        for domain in allowed_domains
-    )
-
-
-def make_deal_text(
-    title,
-    price,
-    url,
-    source,
-    extra=""
-):
-
-    return (
-        f"{title}\n"
-        f"Deal Price: ₹{price}\n"
-        f"{extra}\n"
-        f"{url}"
-    )
-
-
-# =========================================================
-# PRICEHISTORY
-# =========================================================
-
-def scrape_pricehistory_page(
-    page_url,
-    source_name
-):
-
-    deals = []
-
-    try:
-
-        response = session.get(
-            page_url,
-            timeout=TIMEOUT
-        )
-
-        response.raise_for_status()
-
-        soup = BeautifulSoup(
-            response.text,
-            "html.parser"
-        )
-
-        # -------------------------------------------------
-        # Find anchors pointing to actual product/store
-        # pages.
-        # -------------------------------------------------
-
-        seen = set()
-
-        for anchor in soup.find_all("a"):
-
-            href = anchor.get("href")
-
-            if not href:
-                continue
-
-            full_url = urljoin(
-                page_url,
-                href
-            )
-
-            if not is_product_url(full_url):
-                continue
-
-            card = anchor
-
-            # Walk upwards to capture the complete deal card
-            for _ in range(5):
-
-                if card.parent:
-                    card = card.parent
-
-                text = clean_text(
-                    card.get_text(
-                        " ",
-                        strip=True
-                    )
-                )
-
-                if len(text) >= 40:
-                    break
-
-            title = clean_text(
-                anchor.get_text(
-                    " ",
-                    strip=True
-                )
-            )
-
-            if not title or len(title) < 8:
-                continue
-
-            price = extract_price(text)
-
-            if price is None:
-                continue
-
-            key = (
-                title.lower(),
-                full_url
-            )
-
-            if key in seen:
-                continue
-
-            seen.add(key)
-
-            deals.append({
-                "source": source_name,
-                "text": make_deal_text(
-                    title,
-                    price,
-                    full_url,
-                    source_name,
-                    text[:1000]
-                )
-            })
-
-    except Exception as e:
-
-        print(
-            f"⚠️ {source_name} scrape error: "
-            f"{type(e).__name__}: {e}"
-        )
-
-    return deals
-
-
-# =========================================================
-# PRICETRAIL
-# =========================================================
-
-def scrape_pricetrail():
-
-    deals = []
-
-    source_name = "PriceTrail"
-
-    try:
-
-        response = session.get(
-            SOURCE_URLS["PriceTrail"],
-            timeout=TIMEOUT
-        )
-
-        response.raise_for_status()
-
-        soup = BeautifulSoup(
-            response.text,
-            "html.parser"
-        )
-
-        seen = set()
-
-        for anchor in soup.find_all("a"):
-
-            href = anchor.get("href")
-
-            if not href:
-                continue
-
-            full_url = urljoin(
-                SOURCE_URLS["PriceTrail"],
-                href
-            )
-
-            if not is_product_url(full_url):
-                continue
-
-            title = clean_text(
-                anchor.get_text(
-                    " ",
-                    strip=True
-                )
-            )
-
-            if not title or len(title) < 8:
-                continue
-
-            parent = anchor
-
-            card_text = ""
-
-            for _ in range(6):
-
-                if parent.parent:
-                    parent = parent.parent
-
-                card_text = clean_text(
-                    parent.get_text(
-                        " ",
-                        strip=True
-                    )
-                )
-
-                if len(card_text) >= 40:
-                    break
-
-            price = extract_price(
-                card_text
-            )
-
-            if price is None:
-                continue
-
-            key = (
-                title.lower(),
-                full_url
-            )
-
-            if key in seen:
-                continue
-
-            seen.add(key)
-
-            deals.append({
-                "source": source_name,
-                "text": make_deal_text(
-                    title,
-                    price,
-                    full_url,
-                    source_name,
-                    card_text[:1000]
-                )
-            })
-
-    except Exception as e:
-
-        print(
-            f"⚠️ PriceTrail scrape error: "
-            f"{type(e).__name__}: {e}"
-        )
-
-    return deals
-
-
-# =========================================================
-# BUYHATKE
-# =========================================================
-
-def scrape_buyhatke():
-
-    deals = []
-
-    source_name = "Buyhatke"
-
-    try:
-
-        response = session.get(
-            SOURCE_URLS["Buyhatke"],
-            timeout=TIMEOUT
-        )
-
-        response.raise_for_status()
-
-        soup = BeautifulSoup(
-            response.text,
-            "html.parser"
-        )
-
-        seen = set()
-
-        for anchor in soup.find_all("a"):
-
-            href = anchor.get("href")
-
-            if not href:
-                continue
-
-            full_url = urljoin(
-                SOURCE_URLS["Buyhatke"],
-                href
-            )
-
-            if not is_product_url(full_url):
-                continue
-
-            title = clean_text(
-                anchor.get_text(
-                    " ",
-                    strip=True
-                )
-            )
-
-            if not title or len(title) < 8:
-                continue
-
-            parent = anchor
-
-            card_text = ""
-
-            for _ in range(7):
-
-                if parent.parent:
-                    parent = parent.parent
-
-                card_text = clean_text(
-                    parent.get_text(
-                        " ",
-                        strip=True
-                    )
-                )
-
-                if len(card_text) >= 40:
-                    break
-
-            price = extract_price(
-                card_text
-            )
-
-            if price is None:
-                continue
-
-            key = (
-                title.lower(),
-                full_url
-            )
-
-            if key in seen:
-                continue
-
-            seen.add(key)
-
-            deals.append({
-                "source": source_name,
-                "text": make_deal_text(
-                    title,
-                    price,
-                    full_url,
-                    source_name,
-                    card_text[:1000]
-                )
-            })
-
-    except Exception as e:
-
-        print(
-            f"⚠️ Buyhatke scrape error: "
-            f"{type(e).__name__}: {e}"
-        )
-
-    return deals
-
-
-# =========================================================
-# DEDUPLICATION
-# =========================================================
-
-def deduplicate_deals(deals):
-
-    result = []
+        return None
+    current = url.strip()
     seen = set()
 
-    for deal in deals:
+    for _ in range(8):
+        if not current or current in seen:
+            break
+        seen.add(current)
 
-        text = deal.get(
-            "text",
-            ""
+        if store_for(current):
+            return current
+
+        try:
+            r = requests.get(
+                current, headers=HEADERS, timeout=TIMEOUT,
+                allow_redirects=True,
+            )
+            final = r.url or current
+            if store_for(final):
+                return final
+
+            # Only accept meta refresh if it points somewhere useful.
+            soup = BeautifulSoup(r.text or "", "html.parser")
+            meta = soup.find("meta", attrs={"http-equiv": re.compile("refresh", re.I)})
+            if meta:
+                m = re.search(r"url\s*=\s*(.+)", meta.get("content", ""), re.I)
+                if m:
+                    current = requests.compat.urljoin(final, m.group(1).strip(" '\""))
+                    continue
+            return final
+        except requests.RequestException:
+            return current
+
+    return current
+
+
+def canonical_url(url: str) -> Optional[str]:
+    if not url:
+        return None
+    store = store_for(url)
+    if store == "amazon":
+        m = re.search(r"/(?:dp|gp/product)/([A-Z0-9]{8,20})", url, re.I)
+        if m:
+            return f"https://www.amazon.in/dp/{m.group(1).upper()}"
+    if store == "flipkart":
+        p = urlparse(url)
+        return f"https://www.flipkart.com{p.path}" if p.path else url
+    return url
+
+
+def extract_page_price(html: str) -> Optional[float]:
+    if not html:
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    candidates = []
+
+    # Prefer product structured data.
+    for script in soup.find_all("script", type="application/ld+json"):
+        try:
+            import json
+            data = json.loads(script.string or script.get_text())
+        except Exception:
+            continue
+
+        def walk(x):
+            if isinstance(x, dict):
+                for k, v in x.items():
+                    if str(k).lower() in {
+                        "price", "priceamount", "lowprice", "sellingprice",
+                        "currentprice", "finalprice", "saleprice"
+                    }:
+                        p = clean_price(v)
+                        if p and p >= MIN_PRICE:
+                            candidates.append(p)
+                    else:
+                        walk(v)
+            elif isinstance(x, list):
+                for y in x:
+                    walk(y)
+
+        walk(data)
+
+    if candidates:
+        return min(candidates)
+
+    # Fallback is intentionally conservative.
+    for pat in [
+        r'"(?:currentPrice|sellingPrice|finalPrice|salePrice)"\s*:\s*"?(?P<p>[\d,.]+)',
+        r'(?:₹|Rs\.?|INR)\s*(?P<p>[\d,]+(?:\.\d+)?)',
+    ]:
+        for m in re.finditer(pat, html, re.I):
+            p = clean_price(m.group("p"))
+            if p and p >= MIN_PRICE:
+                candidates.append(p)
+
+    return min(candidates) if candidates else None
+
+
+def fetch_product_price(url: str) -> Optional[float]:
+    try:
+        r = requests.get(
+            url, headers=HEADERS, timeout=TIMEOUT,
+            allow_redirects=True,
         )
-
-        urls = extract_urls(text)
-
-        if not urls:
-            continue
-
-        url = urls[0]
-
-        if url in seen:
-            continue
-
-        seen.add(url)
-
-        result.append(deal)
-
-    return result
+        if r.status_code != 200:
+            return None
+        return extract_page_price(r.text)
+    except requests.RequestException:
+        return None
 
 
-# =========================================================
-# MAIN WEB SOURCE FUNCTION
-# =========================================================
+def pricehistory_url(product_url: str) -> str:
+    return f"https://pricehistory.app/?url={quote(product_url, safe='')}"
 
-def get_all_web_deals():
 
-    all_deals = []
+def extract_history(html: str) -> dict:
+    """
+    Best-effort parser. Missing/ambiguous data is UNKNOWN, never a deal.
+    """
+    if not html:
+        return {}
 
-    print(
-        "🌐 Starting web deal collection..."
-    )
+    values = []
+    text = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
 
-    # -----------------------------------------------------
-    # PriceHistory Deals
-    # -----------------------------------------------------
+    patterns = [
+        r"(?:all[-\s]*time\s*low|historical\s*low|lowest\s*price)\s*[:\-]?\s*(?:₹|Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)",
+        r'"(?:lowestPrice|lowest_price|historicalLow|historical_low|allTimeLow|all_time_low|minPrice|min_price)"\s*:\s*"?([\d,.]+)',
+    ]
+    for pat in patterns:
+        for m in re.finditer(pat, text + "\n" + html, re.I):
+            p = clean_price(m.group(1))
+            if p and p >= MIN_PRICE:
+                values.append(p)
 
-    ph_deals = scrape_pricehistory_page(
-        SOURCE_URLS["PriceHistory Deals"],
-        "PriceHistory Deals"
-    )
+    if not values:
+        return {}
+    return {"historical_low": min(values)}
 
-    print(
-        f"🌐 PriceHistory Deals: "
-        f"{len(ph_deals)} candidates"
-    )
 
-    all_deals.extend(
-        ph_deals
-    )
+def fetch_pricehistory(product_url: str) -> dict:
+    try:
+        r = requests.get(
+            pricehistory_url(product_url),
+            headers={**HEADERS, "Referer": product_url},
+            timeout=TIMEOUT,
+            allow_redirects=True,
+        )
+        if r.status_code != 200:
+            return {}
+        data = extract_history(r.text)
+        if data:
+            data["url"] = r.url
+        return data
+    except requests.RequestException:
+        return {}
 
-    # -----------------------------------------------------
-    # PriceHistory Price Drops
-    # -----------------------------------------------------
 
-    ph_drops = scrape_pricehistory_page(
-        SOURCE_URLS["PriceHistory Drops"],
-        "PriceHistory Drops"
-    )
+async def gather_evidence(product_url: str) -> list[dict]:
+    """
+    Parallel evidence collection. PriceHistory is one provider, not truth.
+    """
+    tasks = [
+        asyncio.to_thread(fetch_product_price, product_url),
+        asyncio.to_thread(fetch_pricehistory, product_url),
+    ]
+    page_price, history = await asyncio.gather(*tasks, return_exceptions=True)
+    out = []
 
-    print(
-        f"🌐 PriceHistory Drops: "
-        f"{len(ph_drops)} candidates"
-    )
+    if isinstance(page_price, (int, float)) and page_price >= MIN_PRICE:
+        out.append({
+            "provider": "retailer_page",
+            "kind": "current_price",
+            "price": float(page_price),
+            "confidence": 0.70,
+        })
 
-    all_deals.extend(
-        ph_drops
-    )
+    if isinstance(history, dict) and history.get("historical_low"):
+        out.append({
+            "provider": "pricehistory",
+            "kind": "historical",
+            "historical_low": float(history["historical_low"]),
+            "url": history.get("url"),
+            "confidence": 0.65,
+        })
 
-    # -----------------------------------------------------
-    # PriceTrail
-    # -----------------------------------------------------
-
-    pt_deals = scrape_pricetrail()
-
-    print(
-        f"🌐 PriceTrail: "
-        f"{len(pt_deals)} candidates"
-    )
-
-    all_deals.extend(
-        pt_deals
-    )
-
-    # -----------------------------------------------------
-    # Buyhatke
-    # -----------------------------------------------------
-
-    bh_deals = scrape_buyhatke()
-
-    print(
-        f"🌐 Buyhatke: "
-        f"{len(bh_deals)} candidates"
-    )
-
-    all_deals.extend(
-        bh_deals
-    )
-
-    # -----------------------------------------------------
-    # Final dedupe
-    # -----------------------------------------------------
-
-    all_deals = deduplicate_deals(
-        all_deals
-    )
-
-    print(
-        f"🌐 TOTAL WEB CANDIDATES: "
-        f"{len(all_deals)}"
-    )
-
-    return all_deals
+    return out
