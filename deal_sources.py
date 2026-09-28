@@ -100,14 +100,14 @@ def extract_price_from_text(text: str) -> Optional[float]:
     Extracts deal price from raw Telegram message text or titles.
     Handles patterns like:
     - ₹629 / Rs. 629 / INR 629
-    - @4999 / @ 4999
+    - @4999 / @ 4999 (handles trailing dots like @99.)
     - 4,999/-
     """
     if not text:
         return None
 
     patterns = [
-        r"(?:₹|Rs\.?|INR)\s*(?P<p>[\d,]+(?:\.\d+)?)",
+        r"(?:₹|Rs\.?|INR)\s*(?P<p>[\d,]+(?:\.\d+)?)(?=\b|\s|$)",
         r"@\s*(?P<p>[\d,]+(?:\.\d+)?)",
         r"(?P<p>[\d,]+(?:\.\d+)?)\s*/-"
     ]
@@ -115,7 +115,7 @@ def extract_price_from_text(text: str) -> Optional[float]:
     for pattern in patterns:
         match = re.search(pattern, text, re.I)
         if match:
-            raw = match.group("p")
+            raw = match.group("p").rstrip(".")
             try:
                 price = float(raw.replace(",", ""))
                 if price > 0:
@@ -124,6 +124,28 @@ def extract_price_from_text(text: str) -> Optional[float]:
                 continue
 
     return clean_price(text)
+
+
+def get_offer_price(text: str, url: Optional[str] = None) -> Optional[float]:
+    """
+    Smart Fallback:
+    1. Pehle text se price nikalne ki koshish karta hai.
+    2. Agar text mein price na mile aur URL available ho, toh 
+       URL resolve karke web page se live price fetch kar leta hai.
+    """
+    price = extract_price_from_text(text)
+    if price and price > 0:
+        return price
+
+    if url:
+        resolved = resolve_url(url)
+        if resolved:
+            canonical = canonical_url(resolved) or resolved
+            web_price = fetch_product_price(canonical)
+            if web_price and web_price > 0:
+                return web_price
+
+    return None
 
 
 def _meta_refresh_url(html: str, base_url: str) -> Optional[str]:

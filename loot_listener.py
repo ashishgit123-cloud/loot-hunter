@@ -17,6 +17,8 @@ from telethon.sessions import StringSession
 
 from deal_validator import validate_deal
 from deal_models import Verdict
+# deal_sources_2 se get_offer_price import karein
+from deal_sources_2 import get_offer_price
 
 
 VERSION = "4.0"
@@ -77,28 +79,6 @@ def urls(text: str) -> list[str]:
         if u not in out:
             out.append(u)
     return out
-
-
-def extract_price(text: str) -> Optional[float]:
-    if not text:
-        return None
-
-    # Context-aware patterns first. This avoids accidentally choosing MRP.
-    patterns = [
-        r"(?:deal\s*price|offer\s*price|sale\s*price|current\s*price|buy\s*at|now\s*at|deal\s*@)\s*[:\-@]?\s*(?:₹|rs\.?|inr)?\s*([\d,]+(?:\.\d+)?)",
-        r"(?:₹|rs\.?|inr)\s*([\d,]+(?:\.\d+)?)\s*(?:only|/-)?",
-        r"@\s*(?:₹|rs\.?|inr)?\s*([\d,]+(?:\.\d+)?)",
-    ]
-    for p in patterns:
-        m = re.search(p, text, re.I)
-        if m:
-            try:
-                value = float(m.group(1).replace(",", ""))
-                if value >= MIN_PRICE:
-                    return value
-            except ValueError:
-                pass
-    return None
 
 
 def title_from(text: str) -> str:
@@ -181,7 +161,6 @@ async def process_message(event):
     if not remember_once(message_key):
         return
 
-    price = extract_price(text)
     title = title_from(text)
 
     # Usually first product URL is the deal URL. Validate multiple URLs only
@@ -189,6 +168,14 @@ async def process_message(event):
     for url in found[:3]:
         async with sem:
             try:
+                # Smart Price Fallback: Agar text mein price na mile, toh url se fetch karega
+                first_url = found[0] if found else None
+                price = await asyncio.to_thread(get_offer_price, text, first_url)
+
+                # MIN_PRICE validation check
+                if price and price < MIN_PRICE:
+                    continue
+
                 result = await asyncio.wait_for(
                     validate_deal(title, price, url, source, text),
                     timeout=45,
