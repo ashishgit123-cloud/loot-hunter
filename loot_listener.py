@@ -14,14 +14,15 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
+from flask import Flask, jsonify, render_template
+import threading
 
 from deal_validator import validate_deal
 from deal_models import Verdict
-# Yahan deal_sources hi use kiya gaya hai (no changes to filename)
 from deal_sources import get_offer_price
 
 
-VERSION = "4.1"
+VERSION = "4.2"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -51,6 +52,24 @@ sem = asyncio.Semaphore(MAX_CONCURRENCY)
 
 # Short-lived dedup only. This is NOT deal history.
 seen = OrderedDict()
+
+# Deals Scanned Counter for Dashboard
+DEALS_SCANNED = 0
+
+# Flask App for Web Dashboard
+app = Flask(__name__)
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+@app.route("/stats")
+def stats():
+    return jsonify({"deals_scanned": DEALS_SCANNED})
+
+def run_web():
+    port = int(os.getenv("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 
 def remember_once(key: str) -> bool:
@@ -161,6 +180,10 @@ async def process_message(event):
     if not remember_once(message_key):
         return
 
+    # Increment Deals Scanned Counter
+    global DEALS_SCANNED
+    DEALS_SCANNED += 1
+
     title = title_from(text)
 
     # Usually first product URL is the deal URL. Validate multiple URLs only
@@ -168,7 +191,7 @@ async def process_message(event):
     for url in found[:3]:
         async with sem:
             try:
-                # Smart Fallback: Text se price lo, agar N/A ho toh url se fetch karo
+                # Smart Price Fallback using deal_sources
                 first_url = found[0] if found else None
                 price = await asyncio.to_thread(get_offer_price, text, first_url)
 
@@ -215,7 +238,7 @@ async def on_edited_message(event):
 async def heartbeat():
     while True:
         await asyncio.sleep(HEARTBEAT_SECONDS)
-        await log(f"HEARTBEAT v{VERSION} | dedup={len(seen)} | concurrency={MAX_CONCURRENCY}")
+        await log(f"HEARTBEAT v{VERSION} | scanned={DEALS_SCANNED} | dedup={len(seen)} | concurrency={MAX_CONCURRENCY}")
 
 
 async def discover():
@@ -229,6 +252,11 @@ async def discover():
 
 
 async def main():
+    # Start Flask Web Server in background thread for Railway
+    web_thread = threading.Thread(target=run_web, daemon=True)
+    web_thread.start()
+    await log(f"Web dashboard thread started")
+
     await client.start()
     me = await client.get_me()
     await log(f"Started v{VERSION} as @{getattr(me, 'username', None) or me.first_name}")
