@@ -6,7 +6,7 @@ import os
 import re
 import time
 import traceback
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from typing import Optional
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -22,7 +22,7 @@ from deal_models import Verdict
 from deal_sources import get_offer_price
 
 
-VERSION = "4.2"
+VERSION = "4.3"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -53,8 +53,9 @@ sem = asyncio.Semaphore(MAX_CONCURRENCY)
 # Short-lived dedup only. This is NOT deal history.
 seen = OrderedDict()
 
-# Deals Scanned Counter for Dashboard
+# Deals Scanned Counter & Recent Deals Queue for Dashboard
 DEALS_SCANNED = 0
+RECENT_DEALS = deque(maxlen=15)
 
 # Flask App for Web Dashboard
 app = Flask(__name__)
@@ -65,7 +66,10 @@ def index():
 
 @app.route("/stats")
 def stats():
-    return jsonify({"deals_scanned": DEALS_SCANNED})
+    return jsonify({
+        "deals_scanned": DEALS_SCANNED,
+        "recent_deals": list(RECENT_DEALS)
+    })
 
 def run_web():
     port = int(os.getenv("PORT", "5000"))
@@ -180,11 +184,8 @@ async def process_message(event):
     if not remember_once(message_key):
         return
 
-    # Increment Deals Scanned Counter
-    global DEALS_SCANNED
-    DEALS_SCANNED += 1
-
     title = title_from(text)
+    first_url = found[0] if found else None
 
     # Usually first product URL is the deal URL. Validate multiple URLs only
     # when they resolve to distinct product pages.
@@ -192,12 +193,23 @@ async def process_message(event):
         async with sem:
             try:
                 # Smart Price Fallback using deal_sources
-                first_url = found[0] if found else None
                 price = await asyncio.to_thread(get_offer_price, text, first_url)
 
                 # MIN_PRICE validation check
                 if price and price < MIN_PRICE:
                     continue
+
+                # Increment Deals Scanned Counter & Add to Recent Feed
+                global DEALS_SCANNED, RECENT_DEALS
+                DEALS_SCANNED += 1
+                price_display = price if price else "N/A"
+                RECENT_DEALS.appendleft({
+                    "title": title[:100],
+                    "price": price_display,
+                    "source": source,
+                    "url": url,
+                    "time": datetime.now().strftime("%H:%M:%S")
+                })
 
                 result = await asyncio.wait_for(
                     validate_deal(title, price, url, source, text),

@@ -18,25 +18,46 @@
             justify-content: center;
             align-items: center;
             height: 100vh;
+            padding: 20px;
+        }
+        .main-container {
+            display: flex;
+            gap: 20px;
+            max-width: 900px;
+            width: 100%;
+            height: 85vh;
         }
         .card {
             background: #1e293b;
-            padding: 40px;
+            padding: 30px;
             border-radius: 16px;
             box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
             text-align: center;
-            max-width: 400px;
-            width: 100%;
+            flex: 1;
             border: 1px solid #334155;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+        .feed-card {
+            background: #1e293b;
+            padding: 20px;
+            border-radius: 16px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+            flex: 1.2;
+            border: 1px solid #334155;
+            display: flex;
+            flex-direction: column;
         }
         h1 {
-            font-size: 1.8rem;
+            font-size: 1.6rem;
             margin-bottom: 10px;
             color: #38bdf8;
         }
         p {
             color: #94a3b8;
-            margin-bottom: 25px;
+            margin-bottom: 20px;
+            font-size: 0.95rem;
         }
         .counter-box {
             background: #0f172a;
@@ -54,36 +75,123 @@
             font-size: 0.9rem;
             color: #a7f3d0;
         }
+        h2 {
+            font-size: 1.2rem;
+            margin-bottom: 15px;
+            color: #38bdf8;
+            text-align: left;
+            border-bottom: 1px solid #334155;
+            padding-bottom: 8px;
+        }
+        .deals-list {
+            overflow-y: auto;
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            text-align: left;
+            padding-right: 5px;
+        }
+        .deal-item {
+            background: #0f172a;
+            padding: 12px;
+            border-radius: 8px;
+            border-left: 4px solid #38bdf8;
+            font-size: 0.85rem;
+        }
+        .deal-title {
+            font-weight: bold;
+            color: #f1f5f9;
+            margin-bottom: 4px;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        .deal-meta {
+            display: flex;
+            justify-content: space-between;
+            color: #94a3b8;
+            font-size: 0.75rem;
+        }
+        .deal-price {
+            color: #4ade80;
+            font-weight: bold;
+        }
+        /* Scrollbar design */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0f172a;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 3px;
+        }
     </style>
 </head>
 <body>
 
-    <div class="card">
-        <h1>🔥 Loot Deal Bot</h1>
-        <p>Telegram Deal Aggregator & Validator Live Status</p>
-        
-        <div class="counter-box">
-            <div>Deals Scanned</div>
-            <div class="counter-number" id="scannedCount">0</div>
+    <div class="main-container">
+        <!-- Left Side: Counter Dashboard -->
+        <div class="card">
+            <h1>🔥 Loot Deal Bot</h1>
+            <p>Telegram Deal Aggregator Live Status</p>
+            
+            <div class="counter-box">
+                <div>Deals Scanned</div>
+                <div class="counter-number" id="scannedCount">0</div>
+            </div>
+
+            <div class="status">🟢 Bot Status: Active & Running</div>
         </div>
 
-        <div class="status">🟢 Bot Status: Active & Running</div>
+        <!-- Right Side: Live Scrollable Deals Feed -->
+        <div class="feed-card">
+            <h2>⚡ Live Scanned Deals Feed</h2>
+            <div class="deals-list" id="dealsList">
+                <div class="deal-item">
+                    <div class="deal-title">Waiting for new incoming deals...</div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
-        // Har 5 seconds mein counter ko automatically update karne ke liye API call
         async function fetchStats() {
             try {
                 let response = await fetch('/stats');
                 let data = await response.json();
+                
+                // Update counter
                 document.getElementById('scannedCount').innerText = data.deals_scanned;
+                
+                // Update live deals list
+                let dealsContainer = document.getElementById('dealsList');
+                if (data.recent_deals && data.recent_deals.length > 0) {
+                    let html = '';
+                    data.recent_deals.forEach(deal => {
+                        let priceText = typeof deal.price === 'number' ? `₹${deal.price.toLocaleString()}` : deal.price;
+                        html += `
+                            <div class="deal-item">
+                                <div class="deal-title"><a href="${deal.url}" target="_blank" style="color:inherit; text-decoration:none;">${deal.title}</a></div>
+                                <div class="deal-meta">
+                                    <span class="deal-price">${priceText}</span>
+                                    <span>${deal.source} | ${deal.time}</span>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    dealsContainer.innerHTML = html;
+                }
             } catch (err) {
                 console.error("Error fetching stats:", err);
             }
         }
 
-        setInterval(fetchStats, 5000);
-        fetchStats(); // Initial load
+        setInterval(fetchStats, 4000); // Har 4 second mein refresh hoga
+        fetchStats();
     </script>
 </body>
 </html>
