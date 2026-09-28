@@ -17,11 +17,11 @@ from telethon.sessions import StringSession
 
 from deal_validator import validate_deal
 from deal_models import Verdict
-# deal_sources_2 se get_offer_price import karein
-from deal_sources_2 import get_offer_price
+# Yahan deal_sources hi use kiya gaya hai (no changes to filename)
+from deal_sources import get_offer_price
 
 
-VERSION = "4.0"
+VERSION = "4.1"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -168,7 +168,7 @@ async def process_message(event):
     for url in found[:3]:
         async with sem:
             try:
-                # Smart Price Fallback: Agar text mein price na mile, toh url se fetch karega
+                # Smart Fallback: Text se price lo, agar N/A ho toh url se fetch karo
                 first_url = found[0] if found else None
                 price = await asyncio.to_thread(get_offer_price, text, first_url)
 
