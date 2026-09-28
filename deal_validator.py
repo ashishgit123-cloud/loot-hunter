@@ -31,13 +31,15 @@ async def validate_deal(
             score=None,
             reason="Product URL could not be resolved.",
             offer=Offer(
-                title,
-                price,
-                original,
-                source,
-                text,
+                title=title,
+                price=price,
+                url=original,
+                source=source,
+                text=text,
             ),
             evidence=[],
+            canonical_url=None,
+            store=None,
         )
 
     store = store_for(final)
@@ -49,11 +51,11 @@ async def validate_deal(
             score=None,
             reason="URL does not resolve to a supported retailer.",
             offer=Offer(
-                title,
-                price,
-                original,
-                source,
-                text,
+                title=title,
+                price=price,
+                url=original,
+                source=source,
+                text=text,
             ),
             evidence=[],
             canonical_url=None,
@@ -72,11 +74,11 @@ async def validate_deal(
                 "but product URL could not be canonicalized."
             ),
             offer=Offer(
-                title,
-                price,
-                original,
-                source,
-                text,
+                title=title,
+                price=price,
+                url=original,
+                source=source,
+                text=text,
             ),
             evidence=[],
             canonical_url=None,
@@ -90,11 +92,11 @@ async def validate_deal(
             score=None,
             reason="Telegram payable price could not be extracted.",
             offer=Offer(
-                title,
-                None,
-                original,
-                source,
-                text,
+                title=title,
+                price=None,
+                url=original,
+                source=source,
+                text=text,
             ),
             evidence=[],
             canonical_url=canonical,
@@ -117,11 +119,11 @@ async def validate_deal(
 
     result = evaluate(
         Offer(
-            title,
-            price,
-            original,
-            source,
-            text,
+            title=title,
+            price=price,
+            url=original,
+            source=source,
+            text=text,
         ),
         evidence,
     )
