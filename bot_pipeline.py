@@ -1,24 +1,38 @@
 # bot_pipeline.py
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timedelta
-import chromadb
 
 # Import from our previous modules
 from resolve_url import resolve_url, extract_flipkart_identifiers
 from target_products import is_target_product
 
-# Initialize Local ChromaDB with persistent storage
-chroma_client = chromadb.PersistentClient(path="./loot_db")
-collection = chroma_client.get_or_create_collection(name="verified_loot_history")
+# Initialize Local SQLite Database (Super fast, zero RAM overhead)
+DB_FILE = "loot_history.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS price_history (
+            pid TEXT PRIMARY KEY,
+            title TEXT,
+            price REAL,
+            expiry TEXT,
+            resolved_url TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+# Initialize table on startup
+init_db()
+
 
 def process_incoming_deal(short_url: str, product_title: str, current_price: float) -> dict:
     """
-    Complete Pipeline:
-    1. Resolves short URL and extracts PID.
-    2. Validates against target product whitelist (No junk).
-    3. Compares with ChromaDB (30-day retention) to check price history.
-    4. Saves/Updates record in ChromaDB if valid.
+    Lightning-fast pipeline using SQLite for 30-day history tracking.
     """
     print(f"\n🔍 Processing deal: {product_title} | Price: Rs.{current_price}")
     
@@ -34,41 +48,39 @@ def process_incoming_deal(short_url: str, product_title: str, current_price: flo
     
     if not pid:
         print("⚠️ Warning: Could not find PID in resolved URL. Using fallback identifier...")
-        pid = identifiers["itm"] or product_title[:30] # Fallback key if PID missing
+        pid = identifiers["itm"] or product_title[:30]
         
-    # Step 3: Check ChromaDB for 30-Day Price History
     historical_min = current_price
-    stored_expiry = None
+    now = datetime.utcnow()
     
-    try:
-        existing_record = collection.get(ids=[pid], include=["metadatas"])
-        if existing_record and existing_record["metadatas"]:
-            meta = existing_record["metadatas"][0]
-            old_min = float(meta.get("price", current_price))
-            expiry_str = meta.get("expiry")
+    # Step 3: Check SQLite for 30-Day Price History
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT price, expiry FROM price_history WHERE pid = ?", (pid,))
+    row = cursor.fetchone()
+    
+    if row:
+        old_min, expiry_str = row
+        if expiry_str and now < datetime.fromisoformat(expiry_str):
+            historical_min = min(float(old_min), current_price)
+            print(f"📊 30-Day History Found -> Previous Lowest: Rs.{old_min}")
+        else:
+            print("⏳ Previous history expired (>30 days). Resetting tracking window.")
             
-            # Check if record is within 30-day window
-            if expiry_str and datetime.utcnow() < datetime.fromisoformat(expiry_str):
-                historical_min = min(old_min, current_price)
-                print(f"📊 30-Day History Found -> Previous Lowest: Rs.{old_min}")
-            else:
-                print("⏳ Previous history expired (>30 days). Resetting tracking window.")
-    except Exception as e:
-        print(f"⚠️ DB lookup notice: {e}")
-        
-    # Step 4: Save/Update in ChromaDB with 30-Day Expiry TTL
-    expiry_date = datetime.utcnow() + timedelta(days=30)
-    collection.upsert(
-        ids=[pid],
-        documents=[product_title],
-        metadatas=[{
-            "price": float(historical_min),
-            "current_price": float(current_price),
-            "timestamp": datetime.utcnow().isoformat(),
-            "expiry": expiry_date.isoformat(),
-            "resolved_url": resolved_url
-        }]
-    )
+    # Step 4: Save/Update in SQLite with 30-Day Expiry TTL
+    expiry_date = (now + timedelta(days=30)).isoformat()
+    cursor.execute("""
+        INSERT INTO price_history (pid, title, price, expiry, resolved_url)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(pid) DO UPDATE SET
+            price = excluded.price,
+            expiry = excluded.expiry,
+            resolved_url = excluded.resolved_url
+    """, (pid, product_title, historical_min, expiry_date, resolved_url))
+    
+    conn.commit()
+    conn.close()
     
     print(f"✅ APPROVED & SAVED: Lowest tracked price in last 30 days is Rs.{historical_min}")
     return {
@@ -78,17 +90,3 @@ def process_incoming_deal(short_url: str, product_title: str, current_price: flo
         "historical_min": historical_min,
         "current_price": current_price
     }
-
-
-if __name__ == "__main__":
-    # Test simulation
-    test_short_link = "https://fkrt.cc/ha3xGjc"
-    test_title = "Whirlpool 192 L Direct Cool Single Door 4 Star Refrigerator" # Should be rejected based on rules
-    test_price = 14500.0
-    
-    process_incoming_deal(test_short_link, test_title, test_price)
-    
-    # Test with a valid target product (e.g. iPhone)
-    iphone_title = "Apple iPhone 15 (128 GB) - Black"
-    iphone_price = 58999.0
-    process_incoming_deal("https://fkrt.cc/sampleiphone", iphone_title, iphone_price)
