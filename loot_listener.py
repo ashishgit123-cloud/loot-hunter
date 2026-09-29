@@ -26,7 +26,7 @@ from deal_sources import get_offer_price, resolve_url, canonical_url
 werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.ERROR)
 
-VERSION = "5.1"
+VERSION = "5.2"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -59,7 +59,7 @@ CHANNELS_COUNT = 0
 DEALS_SCANNED = 0
 RECENT_DEALS = deque(maxlen=15)
 POSTED_DEALS = deque(maxlen=15)
-RECENT_LOGS = deque(maxlen=35)
+RECENT_LOGS = deque(maxlen=50)  # Expanded log buffer for deep debugging
 
 app = Flask(__name__)
 
@@ -240,11 +240,16 @@ async def process_message(event):
     title = title_from(text)
     first_url = found[0] if found else None
 
+    # Deep Debug Log: Raw message snippet & URL
+    clean_text_snippet = text.replace('\n', ' ')[:80]
+    await log(f"📥 [{source}] SCAN: '{clean_text_snippet}' | URL: {first_url}")
+
     price = await asyncio.to_thread(get_offer_price, text, first_url)
-    price_status = f"₹{price}" if price else "Not Found"
-    await log(f"{source} | TG Price: {price_status} | {title[:40]}")
+    price_status = f"₹{price}" if price else "Not Found ❌"
+    await log(f"💰 [{source}] Price Extracted: {price_status} | Title: {title[:40]}")
 
     if price and price < MIN_PRICE:
+        await log(f"⏭️ [{source}] Skipped: Price ₹{price} is below MIN_PRICE (₹{MIN_PRICE})", error=True)
         return
 
     deal_url = first_url
@@ -275,6 +280,8 @@ async def process_message(event):
                 res_url = await asyncio.to_thread(resolve_url, url)
                 final_url = (await asyncio.to_thread(canonical_url, res_url)) if res_url else url
 
+                await log(f"🔍 [{source}] Validating URL via sources... Resolved: {final_url}")
+
                 result = await asyncio.wait_for(
                     validate_deal(title, price, final_url, source, text),
                     timeout=45,
@@ -283,20 +290,22 @@ async def process_message(event):
                 evidence_prices = [item.price for item in result.evidence if item.price and item.price > 0]
                 evidence_lows = [item.historical_low for item in result.evidence if item.historical_low and item.historical_low > 0]
                 all_prices = evidence_prices + evidence_lows
-                min_found = f"₹{min(all_prices):,.0f}" if all_prices else "Not Found"
+                min_found = f"₹{min(all_prices):,.0f}" if all_prices else "Not Found ❌"
 
+                # Detailed debug log capturing verdict, extracted price, found evidence min price, and reason
+                is_err = result.verdict not in {Verdict.DEAL, Verdict.POSSIBLE_DEAL}
                 await log(
-                    f"{source} | {result.verdict.value} | "
-                    f"MinRef: {min_found} | {result.reason[:50]}"
+                    f"🎯 [{source}] Verdict: {result.verdict.value} | TG Price: {price_status} | "
+                    f"Evidence MinRef: {min_found} | Reason: {result.reason}",
+                    error=is_err
                 )
                 
                 await send_result(result, source, title, price, final_url)
             except asyncio.TimeoutError:
-                await log(f"Validation timeout: {url}", error=True)
+                await log(f"❌ Validation timeout on URL: {url}", error=True)
             except Exception as exc:
                 await log(
-                    f"Processing error {type(exc).__name__}: {exc}\n"
-                    f"{traceback.format_exc()}",
+                    f"❌ Processing error {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
                     error=True,
                 )
 
