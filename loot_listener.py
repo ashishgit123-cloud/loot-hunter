@@ -26,7 +26,7 @@ from deal_sources import get_offer_price, resolve_url, canonical_url
 werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.ERROR)
 
-VERSION = "5.2"
+VERSION = "5.3"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -59,7 +59,7 @@ CHANNELS_COUNT = 0
 DEALS_SCANNED = 0
 RECENT_DEALS = deque(maxlen=15)
 POSTED_DEALS = deque(maxlen=15)
-RECENT_LOGS = deque(maxlen=50)  # Expanded log buffer for deep debugging
+RECENT_LOGS = deque(maxlen=50)
 
 app = Flask(__name__)
 
@@ -240,7 +240,6 @@ async def process_message(event):
     title = title_from(text)
     first_url = found[0] if found else None
 
-    # Deep Debug Log: Raw message snippet & URL
     clean_text_snippet = text.replace('\n', ' ')[:80]
     await log(f"📥 [{source}] SCAN: '{clean_text_snippet}' | URL: {first_url}")
 
@@ -252,10 +251,16 @@ async def process_message(event):
         await log(f"⏭️ [{source}] Skipped: Price ₹{price} is below MIN_PRICE (₹{MIN_PRICE})", error=True)
         return
 
+    # Robust URL resolution with fallback to raw URL if resolution fails
     deal_url = first_url
     if first_url:
-        resolved_url = await asyncio.to_thread(resolve_url, first_url)
-        deal_url = (await asyncio.to_thread(canonical_url, resolved_url)) if resolved_url else first_url
+        try:
+            resolved_url = await asyncio.to_thread(resolve_url, first_url)
+            if resolved_url:
+                deal_url = await asyncio.to_thread(canonical_url, resolved_url)
+        except Exception as e:
+            await log(f"⚠️ [{source}] URL resolution failed for {first_url}: {e}. Falling back to raw URL.", error=True)
+            deal_url = first_url
 
     global DEALS_SCANNED, RECENT_DEALS
     DEALS_SCANNED += 1
@@ -277,10 +282,14 @@ async def process_message(event):
     for url in found[:3]:
         async with sem:
             try:
-                res_url = await asyncio.to_thread(resolve_url, url)
-                final_url = (await asyncio.to_thread(canonical_url, res_url)) if res_url else url
+                # Resolve with fallback
+                try:
+                    res_url = await asyncio.to_thread(resolve_url, url)
+                    final_url = (await asyncio.to_thread(canonical_url, res_url)) if res_url else url
+                except Exception:
+                    final_url = url
 
-                await log(f"🔍 [{source}] Validating URL via sources... Resolved: {final_url}")
+                await log(f"🔍 [{source}] Validating URL... Target: {final_url}")
 
                 result = await asyncio.wait_for(
                     validate_deal(title, price, final_url, source, text),
@@ -292,7 +301,6 @@ async def process_message(event):
                 all_prices = evidence_prices + evidence_lows
                 min_found = f"₹{min(all_prices):,.0f}" if all_prices else "Not Found ❌"
 
-                # Detailed debug log capturing verdict, extracted price, found evidence min price, and reason
                 is_err = result.verdict not in {Verdict.DEAL, Verdict.POSSIBLE_DEAL}
                 await log(
                     f"🎯 [{source}] Verdict: {result.verdict.value} | TG Price: {price_status} | "
