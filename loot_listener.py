@@ -15,8 +15,9 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 import threading
+import chromadb
 
 from deal_validator import validate_deal
 from deal_models import Verdict
@@ -26,7 +27,7 @@ from deal_sources import get_offer_price, resolve_url, canonical_url
 werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.ERROR)
 
-VERSION = "5.3"
+VERSION = "5.6"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -53,6 +54,11 @@ client = TelegramClient(StringSession(TG_SESSION), API_ID, API_HASH)
 sem = asyncio.Semaphore(MAX_CONCURRENCY)
 
 seen = OrderedDict()
+
+# Initialize ChromaDB Local Persistent Storage & 2-Day TTL Config
+chroma_client = chromadb.PersistentClient(path="./chroma_deal_db")
+deals_collection = chroma_client.get_or_create_collection(name="historical_deals")
+DEAL_TTL_SECONDS = 2 * 24 * 60 * 60  # 48 Hours
 
 START_TIME = time.time()
 CHANNELS_COUNT = 0
@@ -87,9 +93,100 @@ def stats():
         "version": VERSION
     })
 
+@app.route("/search")
+def search_db():
+    query = request.args.get("q", "").strip()
+    if not query:
+        return jsonify([])
+    
+    try:
+        purge_old_deals()
+        results = deals_collection.query(
+            query_texts=[query],
+            n_results=10
+        )
+        
+        matched_deals = []
+        if results and results["ids"] and results["ids"][0]:
+            ids = results["ids"][0]
+            docs = results["documents"][0]
+            metas = results["metadatas"][0]
+            
+            for deal_id, title, meta in zip(ids, docs, metas):
+                matched_deals.append({
+                    "title": title[:100],
+                    "price": meta.get("price", "N/A"),
+                    "min_price": meta.get("min_price", "-"),
+                    "avg_price": meta.get("avg_price", "-"),
+                    "source": meta.get("source", "@unknown"),
+                    "url": meta.get("url", "#"),
+                    "time": datetime.fromtimestamp(meta.get("timestamp", time.time())).strftime("%H:%M:%S")
+                })
+        return jsonify(matched_deals)
+    except Exception as e:
+        print(f"Search API error: {e}")
+        return jsonify([])
+
 def run_web():
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+
+
+def purge_old_deals():
+    """Automatically purges deals older than 2 days from ChromaDB."""
+    try:
+        cutoff = time.time() - DEAL_TTL_SECONDS
+        deals_collection.delete(where={"timestamp": {"$lt": cutoff}})
+    except Exception:
+        pass
+
+
+def save_deal_to_chroma(deal_id: str, title: str, price: any, source: str, url: str, verdict: str, min_price: str, avg_price: str):
+    try:
+        purge_old_deals()
+        now = time.time()
+        deals_collection.upsert(
+            ids=[deal_id],
+            documents=[title],
+            metadatas=[{
+                "price": str(price),
+                "min_price": str(min_price),
+                "avg_price": str(avg_price),
+                "source": source,
+                "url": url,
+                "verdict": verdict,
+                "timestamp": now
+            }]
+        )
+    except Exception as e:
+        print(f"ChromaDB save error: {e}")
+
+
+def load_deals_from_chroma_on_startup():
+    """Restores recent deals from ChromaDB into memory queues on boot."""
+    try:
+        purge_old_deals()
+        data = deals_collection.get(include=["documents", "metadatas"])
+        if data and data["ids"]:
+            items = list(zip(data["ids"], data["documents"], data["metadatas"]))
+            items.sort(key=lambda x: x[2].get("timestamp", 0), reverse=True)
+            
+            for deal_id, title, meta in items[:15]:
+                item = {
+                    "title": title[:100],
+                    "price": meta.get("price", "N/A"),
+                    "min_price": meta.get("min_price", "-"),
+                    "avg_price": meta.get("avg_price", "-"),
+                    "source": meta.get("source", "@unknown"),
+                    "url": meta.get("url", "#"),
+                    "time": datetime.fromtimestamp(meta.get("timestamp", time.time())).strftime("%H:%M:%S")
+                }
+                RECENT_DEALS.append(item)
+                if meta.get("verdict") in {Verdict.DEAL.value, Verdict.POSSIBLE_DEAL.value, "DEAL", "POSSIBLE_DEAL"}:
+                    POSTED_DEALS.append(item)
+            print(f"Restored {len(items)} deals from ChromaDB cache.")
+    except Exception as e:
+        print(f"Error loading ChromaDB cache: {e}")
 
 
 def remember_once(key: str) -> bool:
@@ -166,8 +263,9 @@ async def send_result(result, source, title, price, final_url):
     if result.verdict not in {Verdict.DEAL, Verdict.POSSIBLE_DEAL}:
         return
 
-    evidence_prices = [item.price for item in result.evidence if item.price and item.price > 0]
-    evidence_lows = [item.historical_low for item in result.evidence if item.historical_low and item.historical_low > 0]
+    # Strictly ignore placeholder/bogus prices <= 100 (like ₹1)
+    evidence_prices = [item.price for item in result.evidence if item.price and item.price > 100]
+    evidence_lows = [item.historical_low for item in result.evidence if item.historical_low and item.historical_low > 100]
     all_prices = evidence_prices + evidence_lows
 
     min_price_str = f"₹{min(all_prices):,.0f}" if all_prices else "-"
@@ -194,6 +292,9 @@ async def send_result(result, source, title, price, final_url):
             deal["min_price"] = min_price_str
             deal["avg_price"] = avg_price_str
 
+    deal_id = hashlib.sha256(f"{final_url}:{title}".encode()).hexdigest()[:16]
+    save_deal_to_chroma(deal_id, title, price_display, source, final_url, result.verdict.value, min_price_str, avg_price_str)
+
     emoji = "🔥" if result.verdict == Verdict.DEAL else "🟡"
     e = result.evidence
 
@@ -208,9 +309,9 @@ async def send_result(result, source, title, price, final_url):
 
     for item in e:
         bits = [item.provider, item.kind]
-        if item.price:
+        if item.price and item.price > 100:
             bits.append(f"₹{item.price:,.0f}")
-        if item.historical_low:
+        if item.historical_low and item.historical_low > 100:
             bits.append(f"low ₹{item.historical_low:,.0f}")
         lines.append("• " + " | ".join(bits))
 
@@ -251,7 +352,6 @@ async def process_message(event):
         await log(f"⏭️ [{source}] Skipped: Price ₹{price} is below MIN_PRICE (₹{MIN_PRICE})", error=True)
         return
 
-    # Robust URL resolution with fallback to raw URL if resolution fails
     deal_url = first_url
     if first_url:
         try:
@@ -279,10 +379,12 @@ async def process_message(event):
     if not RECENT_DEALS or RECENT_DEALS[0]["url"] != deal_url:
         RECENT_DEALS.appendleft(new_deal_item)
 
+    deal_id = hashlib.sha256(f"{deal_url}:{title}".encode()).hexdigest()[:16]
+    save_deal_to_chroma(deal_id, title, price_display, source, deal_url, "SCANNED", "-", "-")
+
     for url in found[:3]:
         async with sem:
             try:
-                # Resolve with fallback
                 try:
                     res_url = await asyncio.to_thread(resolve_url, url)
                     final_url = (await asyncio.to_thread(canonical_url, res_url)) if res_url else url
@@ -296,8 +398,9 @@ async def process_message(event):
                     timeout=45,
                 )
 
-                evidence_prices = [item.price for item in result.evidence if item.price and item.price > 0]
-                evidence_lows = [item.historical_low for item in result.evidence if item.historical_low and item.historical_low > 0]
+                # Strictly filter out bogus prices <= 100 (like ₹1 placeholders)
+                evidence_prices = [item.price for item in result.evidence if item.price and item.price > 100]
+                evidence_lows = [item.historical_low for item in result.evidence if item.historical_low and item.historical_low > 100]
                 all_prices = evidence_prices + evidence_lows
                 min_found = f"₹{min(all_prices):,.0f}" if all_prices else "Not Found ❌"
 
@@ -342,6 +445,7 @@ async def heartbeat():
 
 async def discover():
     global CHANNELS_COUNT
+    load_deals_from_chroma_on_startup()
     dialogs = await client.get_dialogs()
     count = 0
     for dialog in dialogs:

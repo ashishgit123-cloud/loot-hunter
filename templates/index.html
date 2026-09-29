@@ -52,6 +52,43 @@
             color: var(--accent-blue);
         }
 
+        /* Search Bar in Header */
+        .search-box {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .search-input {
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            padding: 6px 12px;
+            border-radius: 6px;
+            color: var(--text-main);
+            font-size: 0.85rem;
+            width: 250px;
+            outline: none;
+        }
+
+        .search-input:focus {
+            border-color: var(--accent-blue);
+        }
+
+        .search-btn {
+            background: var(--accent-blue);
+            color: #090d16;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 0.85rem;
+            cursor: pointer;
+        }
+
+        .search-btn:hover {
+            opacity: 0.9;
+        }
+
         .system-status {
             display: flex;
             align-items: center;
@@ -79,7 +116,6 @@
             100% { transform: scale(0.95); opacity: 0.8; }
         }
 
-        /* Layout Grid */
         .dashboard-container {
             display: flex;
             flex-direction: column;
@@ -217,7 +253,6 @@
 
         .deal-price { font-weight: 600; color: var(--accent-green); }
 
-        /* Terminal Logger Bottom Panel */
         .terminal-container {
             background: var(--terminal-bg);
             border: 1px solid var(--border-color);
@@ -252,12 +287,7 @@
             gap: 4px;
         }
 
-        .log-line {
-            line-height: 1.4;
-            display: flex;
-            gap: 8px;
-        }
-
+        .log-line { line-height: 1.4; display: flex; gap: 8px; }
         .log-time { color: #64748b; }
         .log-info { color: #cbd5e1; }
         .log-error { color: var(--accent-red); font-weight: bold; }
@@ -271,18 +301,22 @@
 
     <header>
         <div class="brand">🔥 Loot Deal Command Center</div>
+        
+        <!-- Search DB Input -->
+        <div class="search-box">
+            <input type="text" id="searchInput" class="search-input" placeholder="Search DB (e.g., shoe, protein)..." onkeypress="handleSearchKey(event)">
+            <button class="search-btn" onclick="searchDatabase()">Search DB</button>
+        </div>
+
         <div class="system-status">
             <div class="pulse-dot"></div>
-            <span id="versionText">Bot Engine Active (v5.0)</span>
+            <span>Bot Engine Active (v5.5)</span>
         </div>
     </header>
 
     <div class="dashboard-container">
         
-        <!-- Top Section: Metrics & Deals Feeds -->
         <div class="top-section">
-            
-            <!-- Metrics Column -->
             <div class="metrics-col">
                 <div class="metric-card">
                     <div class="metric-title">Deals Scanned</div>
@@ -313,10 +347,10 @@
                 </div>
             </div>
 
-            <!-- Middle Column: Scanned Feed -->
+            <!-- Scanned Feed / Search Results -->
             <div class="feed-container">
                 <div class="feed-header">
-                    <h2>🔍 Scanned Stream</h2>
+                    <h2 id="feedTitle">🔍 Scanned Stream</h2>
                     <span style="font-size: 0.7rem; color: var(--text-muted);" id="scanCountBadge">0 items</span>
                 </div>
                 <div class="feed-list" id="scannedList">
@@ -326,7 +360,7 @@
                 </div>
             </div>
 
-            <!-- Right Column: Posted Feed -->
+            <!-- Posted Feed -->
             <div class="feed-container">
                 <div class="feed-header">
                     <h2>📢 Telegram Verified Feed</h2>
@@ -341,7 +375,6 @@
 
         </div>
 
-        <!-- Bottom Section: Live Terminal Logger -->
         <div class="terminal-container">
             <div class="terminal-header">
                 <span>💻 Live System Console Logs</span>
@@ -358,7 +391,10 @@
     </div>
 
     <script>
+        let isSearching = false;
+
         async function fetchStats() {
+            if (isSearching) return; // Don't overwrite feed if user is viewing search results
             try {
                 let response = await fetch('/stats');
                 let data = await response.json();
@@ -369,7 +405,6 @@
                 document.getElementById('uptimeVal').innerText = data.uptime || '0s';
                 document.getElementById('dedupVal').innerText = data.dedup_size || 0;
 
-                // Scanned Feed
                 if (data.recent_deals) {
                     document.getElementById('scanCountBadge').innerText = `${data.recent_deals.length} items`;
                     let container = document.getElementById('scannedList');
@@ -395,7 +430,6 @@
                     }
                 }
 
-                // Posted Feed
                 if (data.posted_deals) {
                     document.getElementById('postCountBadge').innerText = `${data.posted_deals.length} items`;
                     let container = document.getElementById('postedList');
@@ -421,7 +455,6 @@
                     }
                 }
 
-                // Terminal Logs
                 if (data.recent_logs) {
                     document.getElementById('logCountBadge').innerText = `${data.recent_logs.length} logs`;
                     let terminal = document.getElementById('terminalLogs');
@@ -442,6 +475,55 @@
             } catch (err) {
                 console.error("Dashboard sync error:", err);
             }
+        }
+
+        async function searchDatabase() {
+            let query = document.getElementById('searchInput').value.trim();
+            if (!query) {
+                isSearching = false;
+                document.getElementById('feedTitle').innerText = "🔍 Scanned Stream";
+                fetchStats();
+                return;
+            }
+
+            isSearching = true;
+            document.getElementById('feedTitle').innerText = `🔎 DB Search: "${query}"`;
+            let container = document.getElementById('scannedList');
+            container.innerHTML = `<div class="deal-card scanned"><div class="deal-title">Searching database...</div></div>`;
+
+            try {
+                let res = await fetch(`/search?q=${encodeURIComponent(query)}`);
+                let results = await res.json();
+                
+                document.getElementById('scanCountBadge').innerText = `${results.length} found`;
+                if (results.length > 0) {
+                    let html = '';
+                    results.forEach(deal => {
+                        html += `
+                            <div class="deal-card scanned">
+                                <div class="deal-title"><a href="${deal.url}" target="_blank">${deal.title}</a></div>
+                                <div class="deal-details">
+                                    <span>Min: <b style="color:#f8fafc;">${deal.min_price}</b></span>
+                                    <span>Avg: <b style="color:#f8fafc;">${deal.avg_price}</b></span>
+                                </div>
+                                <div class="deal-footer">
+                                    <span class="deal-price">Price: ${deal.price}</span>
+                                    <span>${deal.source} • ${deal.time}</span>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    container.innerHTML = html;
+                } else {
+                    container.innerHTML = `<div class="deal-card scanned"><div class="deal-title">No matching deals found in last 2 days DB.</div></div>`;
+                }
+            } catch (err) {
+                console.error("Search error:", err);
+            }
+        }
+
+        function handleSearchKey(e) {
+            if (e.key === 'Enter') searchDatabase();
         }
 
         setInterval(fetchStats, 3000);
