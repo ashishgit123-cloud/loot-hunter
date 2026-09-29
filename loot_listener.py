@@ -1,477 +1,118 @@
+# loot_listener.py
 from __future__ import annotations
 
-import asyncio
-import hashlib
 import os
 import re
-import time
-import traceback
-import logging
-from collections import OrderedDict, deque
-from typing import Optional
-from dataclasses import asdict
-from datetime import datetime, timezone
-
-from dotenv import load_dotenv
 from telethon import TelegramClient, events
-from telethon.sessions import StringSession
-from flask import Flask, jsonify, render_template, request
-import threading
-import chromadb
+from bot_pipeline import process_incoming_deal
 
-from deal_validator import validate_deal
-from deal_models import Verdict
-from deal_sources import get_offer_price, resolve_url, canonical_url
+# --- ENVIRONMENT CONFIGURATION (Railway Variables) ---
+API_ID = int(os.getenv("API_ID", "0"))
+API_HASH = os.getenv("API_HASH", "")
+PHONE_NUMBER = os.getenv("PHONE_NUMBER", "")
 
-# Suppress Flask/Werkzeug HTTP access logs (GET /stats 200 clutter)
-werkzeug_logger = logging.getLogger('werkzeug')
-werkzeug_logger.setLevel(logging.ERROR)
+# Multiple channels comma-separated format mein read honge (e.g., channel1,channel2)
+channels_env = os.getenv("SOURCE_CHANNELS", "")
+SOURCE_CHANNELS = [ch.strip() for ch in channels_env.split(",") if ch.strip()]
 
-VERSION = "5.6"
-load_dotenv()
+OUTPUT_CHANNEL = os.getenv("OUTPUT_CHANNEL", "")
 
-API_ID = int(os.getenv("TG_API_ID", "0"))
-API_HASH = os.getenv("TG_API_HASH", "")
-TG_SESSION = os.getenv("TG_SESSION", "")
-DESTINATION = os.getenv("DESTINATION", "lootersAmer")
-LOG_CHANNEL = os.getenv("LOG_CHANNEL", "")
+client = TelegramClient("loot_bot_session", API_ID, API_HASH)
 
-WATCH_CHANNELS = {
-    x.strip().lower().lstrip("@")
-    for x in os.getenv("WATCH_CHANNELS", "").split(",")
-    if x.strip()
-}
 
-MIN_PRICE = float(os.getenv("MIN_PRICE", "1000"))
-MAX_CONCURRENCY = int(os.getenv("MAX_CONCURRENCY", "6"))
-DEDUP_TTL_SECONDS = int(os.getenv("DEDUP_TTL_SECONDS", "21600"))
-HEARTBEAT_SECONDS = int(os.getenv("HEARTBEAT_SECONDS", "120"))
-
-if not API_ID or not API_HASH or not TG_SESSION:
-    raise RuntimeError("TG_API_ID, TG_API_HASH and TG_SESSION are required")
-
-client = TelegramClient(StringSession(TG_SESSION), API_ID, API_HASH)
-sem = asyncio.Semaphore(MAX_CONCURRENCY)
-
-seen = OrderedDict()
-
-# Initialize ChromaDB Local Persistent Storage & 2-Day TTL Config
-chroma_client = chromadb.PersistentClient(path="./chroma_deal_db")
-deals_collection = chroma_client.get_or_create_collection(name="historical_deals")
-DEAL_TTL_SECONDS = 2 * 24 * 60 * 60  # 48 Hours
-
-START_TIME = time.time()
-CHANNELS_COUNT = 0
-DEALS_SCANNED = 0
-RECENT_DEALS = deque(maxlen=15)
-POSTED_DEALS = deque(maxlen=15)
-RECENT_LOGS = deque(maxlen=50)
-
-app = Flask(__name__)
-
-@app.route("/")
-def index():
-    return render_template("index.html")
-
-def get_uptime_string() -> str:
-    seconds = int(time.time() - START_TIME)
-    hours, remainder = divmod(seconds, 3600)
-    minutes, secs = divmod(remainder, 60)
-    return f"{hours}h {minutes}m"
-
-@app.route("/stats")
-def stats():
-    return jsonify({
-        "deals_scanned": DEALS_SCANNED,
-        "recent_deals": list(RECENT_DEALS),
-        "posted_deals": list(POSTED_DEALS),
-        "recent_logs": list(RECENT_LOGS),
-        "channels_count": CHANNELS_COUNT,
-        "uptime": get_uptime_string(),
-        "dedup_size": len(seen),
-        "concurrency": MAX_CONCURRENCY,
-        "version": VERSION
-    })
-
-@app.route("/search")
-def search_db():
-    query = request.args.get("q", "").strip()
-    if not query:
-        return jsonify([])
+def extract_price_from_text(text: str) -> float:
+    """
+    Extracts price from Telegram message text using regex.
+    """
+    if not text:
+        return 0.0
+        
+    patterns = [
+        r'(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d+)?)',
+        r'price\s*[:\-]?\s*(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d+)?)'
+    ]
     
-    try:
-        purge_old_deals()
-        results = deals_collection.query(
-            query_texts=[query],
-            n_results=10
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            price_str = match.group(1).replace(",", "")
+            try:
+                return float(price_str)
+            except ValueError:
+                continue
+                
+    numbers = re.findall(r'\b[1-9]\d{2,5}\b', text)
+    if numbers:
+        return float(numbers[0])
+        
+    return 0.0
+
+
+def extract_url_from_text(text: str) -> str:
+    """
+    Extracts the first valid URL from message text.
+    """
+    if not text:
+        return ""
+    url_match = re.search(r'(https?://\S+)', text)
+    if url_match:
+        return url_match.group(1).strip(".,")
+    return ""
+
+
+@client.on(events.NewMessage(chats=SOURCE_CHANNELS))
+async def handle_new_loot_message(event):
+    message_text = event.message.message
+    if not message_text:
+        return
+        
+    print(f"\n📥 New message received from source channel...")
+    
+    # 1. Extract URL and Price from raw message text
+    short_url = extract_url_from_text(message_text)
+    current_price = extract_price_from_text(message_text)
+    
+    # Use first non-empty line as product title candidate
+    lines = [line.strip() for line in message_text.split('\n') if line.strip()]
+    product_title = lines[0] if lines else "Unknown Product"
+    
+    if not short_url:
+        print("⚠️ No valid URL found in message. Skipping.")
+        return
+        
+    # 2. Run through Pipeline (Resolution -> Whitelist Filter -> 30-Day ChromaDB History)
+    result = process_incoming_deal(short_url, product_title, current_price)
+    
+    # 3. If approved, broadcast to your target output channel
+    if result["status"] == "approved":
+        historical_min = result["historical_min"]
+        resolved_link = result["resolved_url"]
+        
+        alert_msg = (
+            f"🚨 **VERIFIED LOOT DEAL!** 🚨\n\n"
+            f"📦 **{product_title}**\n"
+            f"💰 **Current Price:** Rs.{current_price}\n"
+            f"📉 **30-Day Historical Low:** Rs.{historical_min}\n\n"
+            f"🔗 [Grab Deal Here]({resolved_link})"
         )
         
-        matched_deals = []
-        if results and results["ids"] and results["ids"][0]:
-            ids = results["ids"][0]
-            docs = results["documents"][0]
-            metas = results["metadatas"][0]
-            
-            for deal_id, title, meta in zip(ids, docs, metas):
-                matched_deals.append({
-                    "title": title[:100],
-                    "price": meta.get("price", "N/A"),
-                    "min_price": meta.get("min_price", "-"),
-                    "avg_price": meta.get("avg_price", "-"),
-                    "source": meta.get("source", "@unknown"),
-                    "url": meta.get("url", "#"),
-                    "time": datetime.fromtimestamp(meta.get("timestamp", time.time())).strftime("%H:%M:%S")
-                })
-        return jsonify(matched_deals)
-    except Exception as e:
-        print(f"Search API error: {e}")
-        return jsonify([])
-
-def run_web():
-    port = int(os.getenv("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
-
-
-def purge_old_deals():
-    """Automatically purges deals older than 2 days from ChromaDB."""
-    try:
-        cutoff = time.time() - DEAL_TTL_SECONDS
-        deals_collection.delete(where={"timestamp": {"$lt": cutoff}})
-    except Exception:
-        pass
-
-
-def save_deal_to_chroma(deal_id: str, title: str, price: any, source: str, url: str, verdict: str, min_price: str, avg_price: str):
-    try:
-        purge_old_deals()
-        now = time.time()
-        deals_collection.upsert(
-            ids=[deal_id],
-            documents=[title],
-            metadatas=[{
-                "price": str(price),
-                "min_price": str(min_price),
-                "avg_price": str(avg_price),
-                "source": source,
-                "url": url,
-                "verdict": verdict,
-                "timestamp": now
-            }]
-        )
-    except Exception as e:
-        print(f"ChromaDB save error: {e}")
-
-
-def load_deals_from_chroma_on_startup():
-    """Restores recent deals from ChromaDB into memory queues on boot."""
-    try:
-        purge_old_deals()
-        data = deals_collection.get(include=["documents", "metadatas"])
-        if data and data["ids"]:
-            items = list(zip(data["ids"], data["documents"], data["metadatas"]))
-            items.sort(key=lambda x: x[2].get("timestamp", 0), reverse=True)
-            
-            for deal_id, title, meta in items[:15]:
-                item = {
-                    "title": title[:100],
-                    "price": meta.get("price", "N/A"),
-                    "min_price": meta.get("min_price", "-"),
-                    "avg_price": meta.get("avg_price", "-"),
-                    "source": meta.get("source", "@unknown"),
-                    "url": meta.get("url", "#"),
-                    "time": datetime.fromtimestamp(meta.get("timestamp", time.time())).strftime("%H:%M:%S")
-                }
-                RECENT_DEALS.append(item)
-                if meta.get("verdict") in {Verdict.DEAL.value, Verdict.POSSIBLE_DEAL.value, "DEAL", "POSSIBLE_DEAL"}:
-                    POSTED_DEALS.append(item)
-            print(f"Restored {len(items)} deals from ChromaDB cache.")
-    except Exception as e:
-        print(f"Error loading ChromaDB cache: {e}")
-
-
-def remember_once(key: str) -> bool:
-    now = time.time()
-    cutoff = now - DEDUP_TTL_SECONDS
-
-    while seen:
-        first_key = next(iter(seen))
-        if seen[first_key] >= cutoff:
-            break
-        seen.popitem(last=False)
-
-    if key in seen:
-        return False
-    seen[key] = now
-    return True
-
-
-URL_RE = re.compile(r"https?://[^\s<>]+", re.I)
-
-
-def urls(text: str) -> list[str]:
-    out = []
-    for u in URL_RE.findall(text or ""):
-        u = u.rstrip(".,!?;:)]}")
-        if u not in out:
-            out.append(u)
-    return out
-
-
-def title_from(text: str) -> str:
-    lines = [x.strip() for x in (text or "").splitlines() if x.strip()]
-    for line in lines:
-        low = line.lower()
-        if line.startswith(("http://", "https://")):
-            continue
-        if re.fullmatch(r"[\d₹$€£,.\s]+", line):
-            continue
-        if any(k in low for k in ("buy now", "click here", "shop now", "limited time")):
-            continue
-        return line[:300]
-    return "Unknown Product"
-
-
-async def log(msg: str, error: bool = False):
-    prefix = "❌" if error else "ℹ️"
-    timestamp = datetime.now().astimezone().strftime("%H:%M:%S")
-    line = f"[{timestamp}] {prefix} {msg}"
-    print(line)
-    
-    global RECENT_LOGS
-    RECENT_LOGS.appendleft({
-        "time": timestamp,
-        "prefix": prefix,
-        "msg": msg,
-        "is_error": error
-    })
-
-    if LOG_CHANNEL:
         try:
-            await client.send_message(LOG_CHANNEL, line)
-        except Exception:
-            pass
-
-
-def channel_allowed(chat) -> bool:
-    if not WATCH_CHANNELS:
-        return bool(getattr(chat, "broadcast", False))
-    username = (getattr(chat, "username", "") or "").lower().lstrip("@")
-    return username in WATCH_CHANNELS
-
-
-async def send_result(result, source, title, price, final_url):
-    if result.verdict not in {Verdict.DEAL, Verdict.POSSIBLE_DEAL}:
-        return
-
-    # Strictly ignore placeholder/bogus prices <= 100 (like ₹1)
-    evidence_prices = [item.price for item in result.evidence if item.price and item.price > 100]
-    evidence_lows = [item.historical_low for item in result.evidence if item.historical_low and item.historical_low > 100]
-    all_prices = evidence_prices + evidence_lows
-
-    min_price_str = f"₹{min(all_prices):,.0f}" if all_prices else "-"
-    avg_price_str = f"₹{sum(all_prices)/len(all_prices):,.0f}" if all_prices else "-"
-
-    global POSTED_DEALS
-    price_display = f"₹{price:,.0f}" if isinstance(price, (int, float)) else (price if price else "N/A")
-    
-    posted_item = {
-        "title": title[:100],
-        "price": price_display,
-        "min_price": min_price_str,
-        "avg_price": avg_price_str,
-        "source": source,
-        "url": final_url,
-        "time": datetime.now().strftime("%H:%M:%S")
-    }
-    
-    if not POSTED_DEALS or POSTED_DEALS[0]["url"] != final_url:
-        POSTED_DEALS.appendleft(posted_item)
-
-    for deal in RECENT_DEALS:
-        if deal["url"] == final_url:
-            deal["min_price"] = min_price_str
-            deal["avg_price"] = avg_price_str
-
-    deal_id = hashlib.sha256(f"{final_url}:{title}".encode()).hexdigest()[:16]
-    save_deal_to_chroma(deal_id, title, price_display, source, final_url, result.verdict.value, min_price_str, avg_price_str)
-
-    emoji = "🔥" if result.verdict == Verdict.DEAL else "🟡"
-    e = result.evidence
-
-    lines = [
-        f"{emoji} {'VERIFIED DEAL' if result.verdict == Verdict.DEAL else 'POSSIBLE DEAL'}",
-        "",
-        f"📦 {result.offer.title}",
-        f"💰 Telegram price: ₹{result.offer.price:,.0f}",
-        f"🎯 Confidence: {result.confidence:.0%}",
-        f"🧠 {result.reason}",
-    ]
-
-    for item in e:
-        bits = [item.provider, item.kind]
-        if item.price and item.price > 100:
-            bits.append(f"₹{item.price:,.0f}")
-        if item.historical_low and item.historical_low > 100:
-            bits.append(f"low ₹{item.historical_low:,.0f}")
-        lines.append("• " + " | ".join(bits))
-
-    for warning in result.warnings:
-        lines.append(f"⚠️ {warning}")
-
-    lines += ["", f"📢 {result.offer.source}", f"🔗 {result.offer.url}"]
-    await client.send_message(DESTINATION, "\n".join(lines))
-
-
-async def process_message(event):
-    chat = await event.get_chat()
-    if not channel_allowed(chat):
-        return
-
-    text = event.raw_text or ""
-    found = urls(text)
-    if not found:
-        return
-
-    source = f"@{chat.username}" if getattr(chat, "username", None) else str(chat.id)
-
-    message_key = f"{chat.id}:{event.id}:{hashlib.sha256(text.encode()).hexdigest()[:12]}"
-    if not remember_once(message_key):
-        return
-
-    title = title_from(text)
-    first_url = found[0] if found else None
-
-    clean_text_snippet = text.replace('\n', ' ')[:80]
-    await log(f"📥 [{source}] SCAN: '{clean_text_snippet}' | URL: {first_url}")
-
-    price = await asyncio.to_thread(get_offer_price, text, first_url)
-    price_status = f"₹{price}" if price else "Not Found ❌"
-    await log(f"💰 [{source}] Price Extracted: {price_status} | Title: {title[:40]}")
-
-    if price and price < MIN_PRICE:
-        await log(f"⏭️ [{source}] Skipped: Price ₹{price} is below MIN_PRICE (₹{MIN_PRICE})", error=True)
-        return
-
-    deal_url = first_url
-    if first_url:
-        try:
-            resolved_url = await asyncio.to_thread(resolve_url, first_url)
-            if resolved_url:
-                deal_url = await asyncio.to_thread(canonical_url, resolved_url)
+            await client.send_message(OUTPUT_CHANNEL, alert_msg, link_preview=False)
+            print("🚀 Successfully broadcasted verified loot alert!")
         except Exception as e:
-            await log(f"⚠️ [{source}] URL resolution failed for {first_url}: {e}. Falling back to raw URL.", error=True)
-            deal_url = first_url
-
-    global DEALS_SCANNED, RECENT_DEALS
-    DEALS_SCANNED += 1
-    price_display = f"₹{price:,.0f}" if isinstance(price, (int, float)) else (price if price else "N/A")
-    
-    new_deal_item = {
-        "title": title[:100],
-        "price": price_display,
-        "min_price": "-",
-        "avg_price": "-",
-        "source": source,
-        "url": deal_url,
-        "time": datetime.now().strftime("%H:%M:%S")
-    }
-    
-    if not RECENT_DEALS or RECENT_DEALS[0]["url"] != deal_url:
-        RECENT_DEALS.appendleft(new_deal_item)
-
-    deal_id = hashlib.sha256(f"{deal_url}:{title}".encode()).hexdigest()[:16]
-    save_deal_to_chroma(deal_id, title, price_display, source, deal_url, "SCANNED", "-", "-")
-
-    for url in found[:3]:
-        async with sem:
-            try:
-                try:
-                    res_url = await asyncio.to_thread(resolve_url, url)
-                    final_url = (await asyncio.to_thread(canonical_url, res_url)) if res_url else url
-                except Exception:
-                    final_url = url
-
-                await log(f"🔍 [{source}] Validating URL... Target: {final_url}")
-
-                result = await asyncio.wait_for(
-                    validate_deal(title, price, final_url, source, text),
-                    timeout=45,
-                )
-
-                # Strictly filter out bogus prices <= 100 (like ₹1 placeholders)
-                evidence_prices = [item.price for item in result.evidence if item.price and item.price > 100]
-                evidence_lows = [item.historical_low for item in result.evidence if item.historical_low and item.historical_low > 100]
-                all_prices = evidence_prices + evidence_lows
-                min_found = f"₹{min(all_prices):,.0f}" if all_prices else "Not Found ❌"
-
-                is_err = result.verdict not in {Verdict.DEAL, Verdict.POSSIBLE_DEAL}
-                await log(
-                    f"🎯 [{source}] Verdict: {result.verdict.value} | TG Price: {price_status} | "
-                    f"Evidence MinRef: {min_found} | Reason: {result.reason}",
-                    error=is_err
-                )
-                
-                await send_result(result, source, title, price, final_url)
-            except asyncio.TimeoutError:
-                await log(f"❌ Validation timeout on URL: {url}", error=True)
-            except Exception as exc:
-                await log(
-                    f"❌ Processing error {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
-                    error=True,
-                )
+            print(f"❌ Failed to send Telegram message: {e}")
 
 
-@client.on(events.NewMessage)
-async def on_new_message(event):
-    try:
-        await process_message(event)
-    except Exception as exc:
-        await log(f"NewMessage error: {type(exc).__name__}: {exc}", error=True)
-
-
-@client.on(events.MessageEdited)
-async def on_edited_message(event):
-    try:
-        await process_message(event)
-    except Exception as exc:
-        await log(f"MessageEdited error: {type(exc).__name__}: {exc}", error=True)
-
-
-async def heartbeat():
-    while True:
-        await asyncio.sleep(HEARTBEAT_SECONDS)
-        await log(f"HEARTBEAT v{VERSION} | scanned={DEALS_SCANNED} | posted={len(POSTED_DEALS)} | channels={CHANNELS_COUNT} | uptime={get_uptime_string()}")
-
-
-async def discover():
-    global CHANNELS_COUNT
-    load_deals_from_chroma_on_startup()
-    dialogs = await client.get_dialogs()
-    count = 0
-    for dialog in dialogs:
-        entity = dialog.entity
-        if getattr(entity, "broadcast", False):
-            count += 1
-    CHANNELS_COUNT = count
-    await log(f"Listening to {count} broadcast channels")
-
-
-async def main():
-    web_thread = threading.Thread(target=run_web, daemon=True)
-    web_thread.start()
-    await log(f"Web dashboard thread started")
-
-    await client.start()
-    me = await client.get_me()
-    await log(f"Started v{VERSION} as @{getattr(me, 'username', None) or me.first_name}")
-    await discover()
-    hb = asyncio.create_task(heartbeat())
-    try:
-        await client.run_until_disconnected()
-    finally:
-        hb.cancel()
-        await asyncio.gather(hb, return_exceptions=True)
+def main():
+    if not API_ID or not API_HASH:
+        print("❌ Error: API_ID or API_HASH environment variables are missing!")
+        return
+        
+    print("🤖 Starting Telegram Loot Bot Listener...")
+    client.start(phone=PHONE_NUMBER)
+    print("✨ Bot is active and listening to target channels...")
+    client.run_until_disconnected()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
