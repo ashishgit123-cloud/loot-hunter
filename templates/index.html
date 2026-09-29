@@ -23,17 +23,27 @@
         .main-container {
             display: flex;
             gap: 20px;
-            max-width: 900px;
+            max-width: 1200px;
             width: 100%;
-            height: 85vh;
+            height: 88vh;
+        }
+        .left-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .right-panel {
+            flex: 1.5;
+            display: flex;
+            gap: 20px;
         }
         .card {
             background: #1e293b;
-            padding: 30px;
+            padding: 25px;
             border-radius: 16px;
             box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
             text-align: center;
-            flex: 1;
             border: 1px solid #334155;
             display: flex;
             flex-direction: column;
@@ -44,44 +54,45 @@
             padding: 20px;
             border-radius: 16px;
             box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
-            flex: 1.2;
+            flex: 1;
             border: 1px solid #334155;
             display: flex;
             flex-direction: column;
+            height: 100%;
         }
         h1 {
-            font-size: 1.6rem;
-            margin-bottom: 10px;
+            font-size: 1.5rem;
+            margin-bottom: 8px;
             color: #38bdf8;
         }
         p {
             color: #94a3b8;
-            margin-bottom: 20px;
-            font-size: 0.95rem;
+            margin-bottom: 15px;
+            font-size: 0.9rem;
         }
         .counter-box {
             background: #0f172a;
-            padding: 20px;
+            padding: 15px;
             border-radius: 12px;
             border: 1px solid #38bdf8;
         }
         .counter-number {
-            font-size: 3rem;
+            font-size: 2.5rem;
             font-weight: bold;
             color: #4ade80;
         }
         .status {
-            margin-top: 20px;
-            font-size: 0.9rem;
+            margin-top: 15px;
+            font-size: 0.85rem;
             color: #a7f3d0;
         }
         h2 {
-            font-size: 1.2rem;
-            margin-bottom: 15px;
+            font-size: 1.1rem;
+            margin-bottom: 12px;
             color: #38bdf8;
             text-align: left;
             border-bottom: 1px solid #334155;
-            padding-bottom: 8px;
+            padding-bottom: 6px;
         }
         .deals-list {
             overflow-y: auto;
@@ -94,10 +105,13 @@
         }
         .deal-item {
             background: #0f172a;
-            padding: 12px;
+            padding: 10px 12px;
             border-radius: 8px;
             border-left: 4px solid #38bdf8;
-            font-size: 0.85rem;
+            font-size: 0.82rem;
+        }
+        .deal-item.posted {
+            border-left-color: #4ade80;
         }
         .deal-title {
             font-weight: bold;
@@ -112,7 +126,7 @@
             display: flex;
             justify-content: space-between;
             color: #94a3b8;
-            font-size: 0.75rem;
+            font-size: 0.72rem;
         }
         .deal-price {
             color: #4ade80;
@@ -120,7 +134,7 @@
         }
         /* Scrollbar design */
         ::-webkit-scrollbar {
-            width: 6px;
+            width: 5px;
         }
         ::-webkit-scrollbar-track {
             background: #0f172a;
@@ -134,25 +148,40 @@
 <body>
 
     <div class="main-container">
-        <!-- Left Side: Counter Dashboard -->
-        <div class="card">
-            <h1>🔥 Loot Deal Bot</h1>
-            <p>Telegram Deal Aggregator Live Status</p>
-            
-            <div class="counter-box">
-                <div>Deals Scanned</div>
-                <div class="counter-number" id="scannedCount">0</div>
-            </div>
+        <!-- Left Panel: Counter & Status -->
+        <div class="left-panel">
+            <div class="card" style="flex: 1;">
+                <h1>🔥 Loot Bot</h1>
+                <p>Telegram Deal Aggregator</p>
+                
+                <div class="counter-box">
+                    <div style="font-size: 0.9rem; color: #94a3b8;">Deals Scanned</div>
+                    <div class="counter-number" id="scannedCount">0</div>
+                </div>
 
-            <div class="status">🟢 Bot Status: Active & Running</div>
+                <div class="status">🟢 Bot Status: Active</div>
+            </div>
         </div>
 
-        <!-- Right Side: Live Scrollable Deals Feed -->
-        <div class="feed-card">
-            <h2>⚡ Live Scanned Deals Feed</h2>
-            <div class="deals-list" id="dealsList">
-                <div class="deal-item">
-                    <div class="deal-title">Waiting for new incoming deals...</div>
+        <!-- Right Panel: Dual Feed (Scanned vs Posted) -->
+        <div class="right-panel">
+            <!-- Section 1: All Scanned Deals -->
+            <div class="feed-card">
+                <h2>🔍 Scanned Deals</h2>
+                <div class="deals-list" id="scannedList">
+                    <div class="deal-item">
+                        <div class="deal-title">Waiting for scans...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Section 2: Posted Deals (Telegram) -->
+            <div class="feed-card">
+                <h2>📢 Posted to Telegram</h2>
+                <div class="deals-list" id="postedList">
+                    <div class="deal-item posted">
+                        <div class="deal-title">Waiting for verified deals...</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -167,8 +196,8 @@
                 // Update counter
                 document.getElementById('scannedCount').innerText = data.deals_scanned;
                 
-                // Update live deals list
-                let dealsContainer = document.getElementById('dealsList');
+                // 1. Update Scanned Deals Feed
+                let scannedContainer = document.getElementById('scannedList');
                 if (data.recent_deals && data.recent_deals.length > 0) {
                     let html = '';
                     data.recent_deals.forEach(deal => {
@@ -183,14 +212,33 @@
                             </div>
                         `;
                     });
-                    dealsContainer.innerHTML = html;
+                    scannedContainer.innerHTML = html;
+                }
+
+                // 2. Update Posted Deals Feed
+                let postedContainer = document.getElementById('postedList');
+                if (data.posted_deals && data.posted_deals.length > 0) {
+                    let html = '';
+                    data.posted_deals.forEach(deal => {
+                        let priceText = typeof deal.price === 'number' ? `₹${deal.price.toLocaleString()}` : deal.price;
+                        html += `
+                            <div class="deal-item posted">
+                                <div class="deal-title"><a href="${deal.url}" target="_blank" style="color:inherit; text-decoration:none;">${deal.title}</a></div>
+                                <div class="deal-meta">
+                                    <span class="deal-price">${priceText}</span>
+                                    <span>${deal.source} | ${deal.time}</span>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    postedContainer.innerHTML = html;
                 }
             } catch (err) {
                 console.error("Error fetching stats:", err);
             }
         }
 
-        setInterval(fetchStats, 4000); // Har 4 second mein refresh hoga
+        setInterval(fetchStats, 4000);
         fetchStats();
     </script>
 </body>

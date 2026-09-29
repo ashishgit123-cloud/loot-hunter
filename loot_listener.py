@@ -19,10 +19,10 @@ import threading
 
 from deal_validator import validate_deal
 from deal_models import Verdict
-from deal_sources import get_offer_price
+from deal_sources import get_offer_price, resolve_url, canonical_url
 
 
-VERSION = "4.3"
+VERSION = "4.6"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -31,8 +31,6 @@ TG_SESSION = os.getenv("TG_SESSION", "")
 DESTINATION = os.getenv("DESTINATION", "lootersAmer")
 LOG_CHANNEL = os.getenv("LOG_CHANNEL", "")
 
-# Only channels explicitly listed here are processed.
-# Empty means all broadcast channels visible to the account.
 WATCH_CHANNELS = {
     x.strip().lower().lstrip("@")
     for x in os.getenv("WATCH_CHANNELS", "").split(",")
@@ -50,14 +48,13 @@ if not API_ID or not API_HASH or not TG_SESSION:
 client = TelegramClient(StringSession(TG_SESSION), API_ID, API_HASH)
 sem = asyncio.Semaphore(MAX_CONCURRENCY)
 
-# Short-lived dedup only. This is NOT deal history.
 seen = OrderedDict()
 
-# Deals Scanned Counter & Recent Deals Queue for Dashboard
+# Dual Queues for Dashboard
 DEALS_SCANNED = 0
 RECENT_DEALS = deque(maxlen=15)
+POSTED_DEALS = deque(maxlen=15)
 
-# Flask App for Web Dashboard
 app = Flask(__name__)
 
 @app.route("/")
@@ -68,7 +65,8 @@ def index():
 def stats():
     return jsonify({
         "deals_scanned": DEALS_SCANNED,
-        "recent_deals": list(RECENT_DEALS)
+        "recent_deals": list(RECENT_DEALS),
+        "posted_deals": list(POSTED_DEALS)
     })
 
 def run_web():
@@ -136,9 +134,22 @@ def channel_allowed(chat) -> bool:
     return username in WATCH_CHANNELS
 
 
-async def send_result(result):
+async def send_result(result, source, title, price, final_url):
     if result.verdict not in {Verdict.DEAL, Verdict.POSSIBLE_DEAL}:
         return
+
+    # Add to Posted Deals Queue when successfully verified & sent
+    global POSTED_DEALS
+    price_display = price if price else "N/A"
+    posted_item = {
+        "title": title[:100],
+        "price": price_display,
+        "source": source,
+        "url": final_url,
+        "time": datetime.now().strftime("%H:%M:%S")
+    }
+    if not POSTED_DEALS or POSTED_DEALS[0]["url"] != final_url:
+        POSTED_DEALS.appendleft(posted_item)
 
     emoji = "🔥" if result.verdict == Verdict.DEAL else "🟡"
     e = result.evidence
@@ -179,7 +190,7 @@ async def process_message(event):
 
     source = f"@{chat.username}" if getattr(chat, "username", None) else str(chat.id)
 
-    # Message-level dedup: edited messages can arrive more than once.
+    # Message-level dedup
     message_key = f"{chat.id}:{event.id}:{hashlib.sha256(text.encode()).hexdigest()[:12]}"
     if not remember_once(message_key):
         return
@@ -187,32 +198,40 @@ async def process_message(event):
     title = title_from(text)
     first_url = found[0] if found else None
 
-    # Usually first product URL is the deal URL. Validate multiple URLs only
-    # when they resolve to distinct product pages.
+    price = await asyncio.to_thread(get_offer_price, text, first_url)
+
+    if price and price < MIN_PRICE:
+        return
+
+    deal_url = first_url
+    if first_url:
+        resolved_url = await asyncio.to_thread(resolve_url, first_url)
+        deal_url = (await asyncio.to_thread(canonical_url, resolved_url)) if resolved_url else first_url
+
+    # Add to Scanned Deals Queue
+    global DEALS_SCANNED, RECENT_DEALS
+    DEALS_SCANNED += 1
+    price_display = price if price else "N/A"
+    
+    new_deal_item = {
+        "title": title[:100],
+        "price": price_display,
+        "source": source,
+        "url": deal_url,
+        "time": datetime.now().strftime("%H:%M:%S")
+    }
+    
+    if not RECENT_DEALS or RECENT_DEALS[0]["url"] != deal_url:
+        RECENT_DEALS.appendleft(new_deal_item)
+
     for url in found[:3]:
         async with sem:
             try:
-                # Smart Price Fallback using deal_sources
-                price = await asyncio.to_thread(get_offer_price, text, first_url)
-
-                # MIN_PRICE validation check
-                if price and price < MIN_PRICE:
-                    continue
-
-                # Increment Deals Scanned Counter & Add to Recent Feed
-                global DEALS_SCANNED, RECENT_DEALS
-                DEALS_SCANNED += 1
-                price_display = price if price else "N/A"
-                RECENT_DEALS.appendleft({
-                    "title": title[:100],
-                    "price": price_display,
-                    "source": source,
-                    "url": url,
-                    "time": datetime.now().strftime("%H:%M:%S")
-                })
+                res_url = await asyncio.to_thread(resolve_url, url)
+                final_url = (await asyncio.to_thread(canonical_url, res_url)) if res_url else url
 
                 result = await asyncio.wait_for(
-                    validate_deal(title, price, url, source, text),
+                    validate_deal(title, price, final_url, source, text),
                     timeout=45,
                 )
                 await log(
@@ -220,7 +239,7 @@ async def process_message(event):
                     f"{title[:80]} | ₹{price if price else 'N/A'} | "
                     f"{result.reason}"
                 )
-                await send_result(result)
+                await send_result(result, source, title, price, final_url)
             except asyncio.TimeoutError:
                 await log(f"Validation timeout: {url}", error=True)
             except Exception as exc:
@@ -250,7 +269,7 @@ async def on_edited_message(event):
 async def heartbeat():
     while True:
         await asyncio.sleep(HEARTBEAT_SECONDS)
-        await log(f"HEARTBEAT v{VERSION} | scanned={DEALS_SCANNED} | dedup={len(seen)} | concurrency={MAX_CONCURRENCY}")
+        await log(f"HEARTBEAT v{VERSION} | scanned={DEALS_SCANNED} | posted={len(POSTED_DEALS)} | dedup={len(seen)}")
 
 
 async def discover():
@@ -264,7 +283,6 @@ async def discover():
 
 
 async def main():
-    # Start Flask Web Server in background thread for Railway
     web_thread = threading.Thread(target=run_web, daemon=True)
     web_thread.start()
     await log(f"Web dashboard thread started")
@@ -282,4 +300,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main())	
