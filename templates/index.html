@@ -3,188 +3,285 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Loot Bot Dashboard</title>
+    <title>Loot Bot Command Center</title>
     <style>
+        :root {
+            --bg-color: #090d16;
+            --card-bg: #131b2e;
+            --border-color: #1e293b;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --accent-blue: #38bdf8;
+            --accent-green: #4ade80;
+            --accent-yellow: #facc15;
+        }
+
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-family: 'Inter', 'Segoe UI', sans-serif;
         }
+
         body {
-            background: #0f172a;
-            color: #f8fafc;
-            display: flex;
-            justify-content: center;
-            align-items: center;
+            background-color: var(--bg-color);
+            color: var(--text-main);
             height: 100vh;
-            padding: 20px;
-        }
-        .main-container {
-            display: flex;
-            gap: 20px;
-            max-width: 1200px;
-            width: 100%;
-            height: 88vh;
-        }
-        .left-panel {
-            flex: 1;
             display: flex;
             flex-direction: column;
-            gap: 20px;
+            overflow: hidden;
         }
-        .right-panel {
-            flex: 1.5;
+
+        /* Top Navbar */
+        header {
             display: flex;
-            gap: 20px;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 30px;
+            background: var(--card-bg);
+            border-bottom: 1px solid var(--border-color);
         }
-        .card {
-            background: #1e293b;
-            padding: 25px;
-            border-radius: 16px;
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
-            text-align: center;
-            border: 1px solid #334155;
+
+        .brand {
             display: flex;
-            flex-direction: column;
-            justify-content: center;
-        }
-        .feed-card {
-            background: #1e293b;
-            padding: 20px;
-            border-radius: 16px;
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
-            flex: 1;
-            border: 1px solid #334155;
-            display: flex;
-            flex-direction: column;
-            height: 100%;
-        }
-        h1 {
-            font-size: 1.5rem;
-            margin-bottom: 8px;
-            color: #38bdf8;
-        }
-        p {
-            color: #94a3b8;
-            margin-bottom: 15px;
-            font-size: 0.9rem;
-        }
-        .counter-box {
-            background: #0f172a;
-            padding: 15px;
-            border-radius: 12px;
-            border: 1px solid #38bdf8;
-        }
-        .counter-number {
-            font-size: 2.5rem;
+            align-items: center;
+            gap: 10px;
+            font-size: 1.2rem;
             font-weight: bold;
-            color: #4ade80;
+            color: var(--accent-blue);
         }
-        .status {
-            margin-top: 15px;
+
+        .system-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
             font-size: 0.85rem;
-            color: #a7f3d0;
+            background: rgba(74, 222, 128, 0.1);
+            padding: 6px 12px;
+            border-radius: 20px;
+            color: var(--accent-green);
+            border: 1px solid rgba(74, 222, 128, 0.2);
         }
-        h2 {
-            font-size: 1.1rem;
-            margin-bottom: 12px;
-            color: #38bdf8;
-            text-align: left;
-            border-bottom: 1px solid #334155;
-            padding-bottom: 6px;
+
+        .pulse-dot {
+            width: 8px;
+            height: 8px;
+            background-color: var(--accent-green);
+            border-radius: 50%;
+            box-shadow: 0 0 8px var(--accent-green);
+            animation: pulse 1.5px infinite;
         }
-        .deals-list {
+
+        @keyframes pulse {
+            0% { transform: scale(0.95); opacity: 0.8; }
+            50% { transform: scale(1.2); opacity: 1; }
+            100% { transform: scale(0.95); opacity: 0.8; }
+        }
+
+        /* Main Dashboard Layout */
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: 300px 1fr 1fr;
+            gap: 20px;
+            padding: 20px 30px;
+            flex-grow: 1;
+            height: calc(100vh - 70px);
+        }
+
+        /* Metrics Column */
+        .metrics-col {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .metric-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 14px;
+            padding: 20px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+        }
+
+        .metric-title {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        .metric-value {
+            font-size: 2.2rem;
+            font-weight: bold;
+            color: var(--accent-green);
+        }
+
+        /* Feeds Column */
+        .feed-container {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 14px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+        }
+
+        .feed-header {
+            padding: 15px 20px;
+            background: rgba(255,255,255,0.02);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .feed-header h2 {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--accent-blue);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .feed-list {
+            padding: 15px;
             overflow-y: auto;
             flex-grow: 1;
             display: flex;
             flex-direction: column;
-            gap: 10px;
-            text-align: left;
-            padding-right: 5px;
+            gap: 12px;
         }
-        .deal-item {
-            background: #0f172a;
-            padding: 10px 12px;
-            border-radius: 8px;
-            border-left: 4px solid #38bdf8;
-            font-size: 0.82rem;
+
+        .deal-card {
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 12px 15px;
+            transition: transform 0.2s, border-color 0.2s;
         }
-        .deal-item.posted {
-            border-left-color: #4ade80;
+
+        .deal-card:hover {
+            border-color: var(--accent-blue);
+            transform: translateY(-2px);
         }
+
+        .deal-card.posted {
+            border-left: 4px solid var(--accent-green);
+        }
+
+        .deal-card.scanned {
+            border-left: 4px solid var(--accent-blue);
+        }
+
         .deal-title {
-            font-weight: bold;
-            color: #f1f5f9;
-            margin-bottom: 4px;
-            display: -webkit-box;
-            -webkit-line-clamp: 2;
-            -webkit-box-orient: vertical;
-            overflow: hidden;
+            font-size: 0.9rem;
+            font-weight: 500;
+            margin-bottom: 6px;
+            line-height: 1.4;
         }
-        .deal-meta {
+
+        .deal-title a {
+            color: var(--text-main);
+            text-decoration: none;
+        }
+
+        .deal-title a:hover {
+            color: var(--accent-blue);
+            text-decoration: underline;
+        }
+
+        .deal-footer {
             display: flex;
             justify-content: space-between;
-            color: #94a3b8;
-            font-size: 0.72rem;
+            align-items: center;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 8px;
+            border-top: 1px solid rgba(255,255,255,0.05);
+            padding-top: 6px;
         }
+
         .deal-price {
-            color: #4ade80;
-            font-weight: bold;
+            font-weight: 600;
+            color: var(--accent-green);
+            font-size: 0.85rem;
         }
-        /* Scrollbar design */
+
+        /* Custom Scrollbar */
         ::-webkit-scrollbar {
-            width: 5px;
+            width: 6px;
         }
         ::-webkit-scrollbar-track {
-            background: #0f172a;
+            background: transparent;
         }
         ::-webkit-scrollbar-thumb {
-            background: #334155;
+            background: var(--border-color);
             border-radius: 3px;
         }
     </style>
 </head>
 <body>
 
-    <div class="main-container">
-        <!-- Left Panel: Counter & Status -->
-        <div class="left-panel">
-            <div class="card" style="flex: 1;">
-                <h1>🔥 Loot Bot</h1>
-                <p>Telegram Deal Aggregator</p>
-                
-                <div class="counter-box">
-                    <div style="font-size: 0.9rem; color: #94a3b8;">Deals Scanned</div>
-                    <div class="counter-number" id="scannedCount">0</div>
-                </div>
+    <!-- Top Navigation Bar -->
+    <header>
+        <div class="brand">
+            🔥 Loot Deal Command Center
+        </div>
+        <div class="system-status">
+            <div class="pulse-dot"></div>
+            <span>Bot Engine Active (v4.6)</span>
+        </div>
+    </header>
 
-                <div class="status">🟢 Bot Status: Active</div>
+    <!-- Main Dashboard Grid -->
+    <div class="dashboard-grid">
+        
+        <!-- Left Sidebar: Metrics -->
+        <div class="metrics-col">
+            <div class="metric-card">
+                <div class="metric-title">Total Deals Scanned</div>
+                <div class="metric-value" id="scannedCount">0</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-title">Posted to Telegram</div>
+                <div class="metric-value" id="postedCount" style="color: var(--accent-blue);">0</div>
+            </div>
+            <div class="metric-card" style="flex-grow: 1; display: flex; flex-direction: column; justify-content: center;">
+                <div class="metric-title">System Health</div>
+                <div style="font-size: 1.1rem; color: #facc15; font-weight: 500; margin-top: 5px;">Optimal & Secure</div>
+                <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 5px;">Auto-syncing every 4s</div>
             </div>
         </div>
 
-        <!-- Right Panel: Dual Feed (Scanned vs Posted) -->
-        <div class="right-panel">
-            <!-- Section 1: All Scanned Deals -->
-            <div class="feed-card">
-                <h2>🔍 Scanned Deals</h2>
-                <div class="deals-list" id="scannedList">
-                    <div class="deal-item">
-                        <div class="deal-title">Waiting for scans...</div>
-                    </div>
-                </div>
+        <!-- Middle Column: Live Scanned Feed -->
+        <div class="feed-container">
+            <div class="feed-header">
+                <h2>🔍 Live Scanned Stream</h2>
+                <span style="font-size: 0.75rem; color: var(--text-muted);" id="scanCountBadge">0 items</span>
             </div>
-
-            <!-- Section 2: Posted Deals (Telegram) -->
-            <div class="feed-card">
-                <h2>📢 Posted to Telegram</h2>
-                <div class="deals-list" id="postedList">
-                    <div class="deal-item posted">
-                        <div class="deal-title">Waiting for verified deals...</div>
-                    </div>
+            <div class="feed-list" id="scannedList">
+                <div class="deal-card scanned">
+                    <div class="deal-title">Listening for incoming channel broadcasts...</div>
                 </div>
             </div>
         </div>
+
+        <!-- Right Column: Live Posted Feed -->
+        <div class="feed-container">
+            <div class="feed-header">
+                <h2>📢 Telegram Verified Feed</h2>
+                <span style="font-size: 0.75rem; color: var(--text-muted);" id="postCountBadge">0 items</span>
+            </div>
+            <div class="feed-list" id="postedList">
+                <div class="deal-card posted">
+                    <div class="deal-title">Waiting for verified deals to publish...</div>
+                </div>
+            </div>
+        </div>
+
     </div>
 
     <script>
@@ -193,48 +290,53 @@
                 let response = await fetch('/stats');
                 let data = await response.json();
                 
-                // Update counter
+                // Counters update
                 document.getElementById('scannedCount').innerText = data.deals_scanned;
                 
-                // 1. Update Scanned Deals Feed
-                let scannedContainer = document.getElementById('scannedList');
-                if (data.recent_deals && data.recent_deals.length > 0) {
-                    let html = '';
-                    data.recent_deals.forEach(deal => {
-                        let priceText = typeof deal.price === 'number' ? `₹${deal.price.toLocaleString()}` : deal.price;
-                        html += `
-                            <div class="deal-item">
-                                <div class="deal-title"><a href="${deal.url}" target="_blank" style="color:inherit; text-decoration:none;">${deal.title}</a></div>
-                                <div class="deal-meta">
-                                    <span class="deal-price">${priceText}</span>
-                                    <span>${deal.source} | ${deal.time}</span>
+                if (data.recent_deals) {
+                    document.getElementById('scanCountBadge').innerText = `${data.recent_deals.length} items`;
+                    let scannedContainer = document.getElementById('scannedList');
+                    if (data.recent_deals.length > 0) {
+                        let html = '';
+                        data.recent_deals.forEach(deal => {
+                            let priceText = typeof deal.price === 'number' ? `₹${deal.price.toLocaleString()}` : deal.price;
+                            html += `
+                                <div class="deal-card scanned">
+                                    <div class="deal-title"><a href="${deal.url}" target="_blank">${deal.title}</a></div>
+                                    <div class="deal-footer">
+                                        <span class="deal-price">${priceText}</span>
+                                        <span>${deal.source} • ${deal.time}</span>
+                                    </div>
                                 </div>
-                            </div>
-                        `;
-                    });
-                    scannedContainer.innerHTML = html;
+                            `;
+                        });
+                        scannedContainer.innerHTML = html;
+                    }
                 }
 
-                // 2. Update Posted Deals Feed
-                let postedContainer = document.getElementById('postedList');
-                if (data.posted_deals && data.posted_deals.length > 0) {
-                    let html = '';
-                    data.posted_deals.forEach(deal => {
-                        let priceText = typeof deal.price === 'number' ? `₹${deal.price.toLocaleString()}` : deal.price;
-                        html += `
-                            <div class="deal-item posted">
-                                <div class="deal-title"><a href="${deal.url}" target="_blank" style="color:inherit; text-decoration:none;">${deal.title}</a></div>
-                                <div class="deal-meta">
-                                    <span class="deal-price">${priceText}</span>
-                                    <span>${deal.source} | ${deal.time}</span>
+                if (data.posted_deals) {
+                    document.getElementById('postedCount').innerText = data.posted_deals.length;
+                    document.getElementById('postCountBadge').innerText = `${data.posted_deals.length} items`;
+                    let postedContainer = document.getElementById('postedList');
+                    if (data.posted_deals.length > 0) {
+                        let html = '';
+                        data.posted_deals.forEach(deal => {
+                            let priceText = typeof deal.price === 'number' ? `₹${deal.price.toLocaleString()}` : deal.price;
+                            html += `
+                                <div class="deal-card posted">
+                                    <div class="deal-title"><a href="${deal.url}" target="_blank">${deal.title}</a></div>
+                                    <div class="deal-footer">
+                                        <span class="deal-price">${priceText}</span>
+                                        <span>${deal.source} • ${deal.time}</span>
+                                    </div>
                                 </div>
-                            </div>
-                        `;
-                    });
-                    postedContainer.innerHTML = html;
+                            `;
+                        });
+                        postedContainer.innerHTML = html;
+                    }
                 }
             } catch (err) {
-                console.error("Error fetching stats:", err);
+                console.error("Dashboard sync error:", err);
             }
         }
 
