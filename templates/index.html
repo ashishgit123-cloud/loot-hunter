@@ -14,6 +14,8 @@
             --accent-blue: #38bdf8;
             --accent-green: #4ade80;
             --accent-yellow: #facc15;
+            --accent-red: #f87171;
+            --terminal-bg: #05080f;
         }
 
         * {
@@ -36,7 +38,7 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 15px 30px;
+            padding: 12px 25px;
             background: var(--card-bg);
             border-bottom: 1px solid var(--border-color);
         }
@@ -45,7 +47,7 @@
             display: flex;
             align-items: center;
             gap: 10px;
-            font-size: 1.2rem;
+            font-size: 1.1rem;
             font-weight: bold;
             color: var(--accent-blue);
         }
@@ -54,17 +56,17 @@
             display: flex;
             align-items: center;
             gap: 8px;
-            font-size: 0.85rem;
+            font-size: 0.8rem;
             background: rgba(74, 222, 128, 0.1);
-            padding: 6px 12px;
+            padding: 5px 10px;
             border-radius: 20px;
             color: var(--accent-green);
             border: 1px solid rgba(74, 222, 128, 0.2);
         }
 
         .pulse-dot {
-            width: 8px;
-            height: 8px;
+            width: 7px;
+            height: 7px;
             background-color: var(--accent-green);
             border-radius: 50%;
             box-shadow: 0 0 8px var(--accent-green);
@@ -77,55 +79,75 @@
             100% { transform: scale(0.95); opacity: 0.8; }
         }
 
-        .dashboard-grid {
-            display: grid;
-            grid-template-columns: 300px 1fr 1fr;
-            gap: 20px;
-            padding: 20px 30px;
+        /* Layout Grid */
+        .dashboard-container {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            padding: 15px 25px;
             flex-grow: 1;
-            height: calc(100vh - 70px);
+            height: calc(100vh - 60px);
+            overflow: hidden;
+        }
+
+        .top-section {
+            display: grid;
+            grid-template-columns: 280px 1fr 1fr;
+            gap: 15px;
+            flex: 1.2;
+            min-height: 0;
         }
 
         .metrics-col {
             display: flex;
             flex-direction: column;
-            gap: 20px;
+            gap: 12px;
         }
 
         .metric-card {
             background: var(--card-bg);
             border: 1px solid var(--border-color);
-            border-radius: 14px;
-            padding: 20px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+            border-radius: 12px;
+            padding: 15px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
         }
 
         .metric-title {
-            font-size: 0.85rem;
+            font-size: 0.75rem;
             color: var(--text-muted);
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            margin-bottom: 8px;
+            margin-bottom: 4px;
         }
 
         .metric-value {
-            font-size: 2.2rem;
+            font-size: 1.6rem;
             font-weight: bold;
             color: var(--accent-green);
+        }
+
+        .health-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.8rem;
+            padding: 4px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.03);
         }
 
         .feed-container {
             background: var(--card-bg);
             border: 1px solid var(--border-color);
-            border-radius: 14px;
+            border-radius: 12px;
             display: flex;
             flex-direction: column;
             overflow: hidden;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            min-height: 0;
         }
 
         .feed-header {
-            padding: 15px 20px;
+            padding: 10px 15px;
             background: rgba(255,255,255,0.02);
             border-bottom: 1px solid var(--border-color);
             display: flex;
@@ -134,151 +156,201 @@
         }
 
         .feed-header h2 {
-            font-size: 1rem;
+            font-size: 0.9rem;
             font-weight: 600;
             color: var(--accent-blue);
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
         }
 
         .feed-list {
-            padding: 15px;
+            padding: 10px;
             overflow-y: auto;
             flex-grow: 1;
             display: flex;
             flex-direction: column;
-            gap: 12px;
+            gap: 10px;
         }
 
         .deal-card {
             background: var(--bg-color);
             border: 1px solid var(--border-color);
-            border-radius: 10px;
-            padding: 12px 15px;
-            transition: transform 0.2s, border-color 0.2s;
+            border-radius: 8px;
+            padding: 10px 12px;
         }
 
-        .deal-card:hover {
-            border-color: var(--accent-blue);
-            transform: translateY(-2px);
-        }
-
-        .deal-card.posted {
-            border-left: 4px solid var(--accent-green);
-        }
-
-        .deal-card.scanned {
-            border-left: 4px solid var(--accent-blue);
-        }
+        .deal-card.posted { border-left: 3px solid var(--accent-green); }
+        .deal-card.scanned { border-left: 3px solid var(--accent-blue); }
 
         .deal-title {
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             font-weight: 500;
-            margin-bottom: 6px;
-            line-height: 1.4;
+            margin-bottom: 4px;
+            line-height: 1.3;
         }
 
-        .deal-title a {
-            color: var(--text-main);
-            text-decoration: none;
-        }
-
-        .deal-title a:hover {
-            color: var(--accent-blue);
-            text-decoration: underline;
-        }
+        .deal-title a { color: var(--text-main); text-decoration: none; }
+        .deal-title a:hover { color: var(--accent-blue); text-decoration: underline; }
 
         .deal-details {
             display: flex;
             justify-content: space-between;
-            font-size: 0.78rem;
+            font-size: 0.72rem;
             color: var(--text-muted);
             background: rgba(255,255,255,0.02);
-            padding: 6px 8px;
-            border-radius: 6px;
-            margin: 6px 0;
+            padding: 4px 6px;
+            border-radius: 4px;
+            margin: 4px 0;
         }
 
         .deal-footer {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            font-size: 0.75rem;
+            font-size: 0.7rem;
             color: var(--text-muted);
-            margin-top: 6px;
+            margin-top: 4px;
             border-top: 1px solid rgba(255,255,255,0.05);
-            padding-top: 6px;
+            padding-top: 4px;
         }
 
-        .deal-price {
-            font-weight: 600;
-            color: var(--accent-green);
-            font-size: 0.85rem;
+        .deal-price { font-weight: 600; color: var(--accent-green); }
+
+        /* Terminal Logger Bottom Panel */
+        .terminal-container {
+            background: var(--terminal-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            flex: 0.8;
+            overflow: hidden;
+            box-shadow: inset 0 2px 10px rgba(0,0,0,0.5);
+            min-height: 0;
         }
 
-        ::-webkit-scrollbar {
-            width: 6px;
+        .terminal-header {
+            padding: 8px 15px;
+            background: rgba(255,255,255,0.03);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.8rem;
+            color: var(--text-muted);
         }
-        ::-webkit-scrollbar-track {
-            background: transparent;
+
+        .terminal-body {
+            padding: 10px 15px;
+            overflow-y: auto;
+            flex-grow: 1;
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 0.75rem;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
         }
-        ::-webkit-scrollbar-thumb {
-            background: var(--border-color);
-            border-radius: 3px;
+
+        .log-line {
+            line-height: 1.4;
+            display: flex;
+            gap: 8px;
         }
+
+        .log-time { color: #64748b; }
+        .log-info { color: #cbd5e1; }
+        .log-error { color: var(--accent-red); font-weight: bold; }
+
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
     </style>
 </head>
 <body>
 
     <header>
-        <div class="brand">
-            🔥 Loot Deal Command Center
-        </div>
+        <div class="brand">🔥 Loot Deal Command Center</div>
         <div class="system-status">
             <div class="pulse-dot"></div>
-            <span>Bot Engine Active (v4.7)</span>
+            <span id="versionText">Bot Engine Active (v5.0)</span>
         </div>
     </header>
 
-    <div class="dashboard-grid">
+    <div class="dashboard-container">
         
-        <div class="metrics-col">
-            <div class="metric-card">
-                <div class="metric-title">Total Deals Scanned</div>
-                <div class="metric-value" id="scannedCount">0</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-title">Posted to Telegram</div>
-                <div class="metric-value" id="postedCount" style="color: var(--accent-blue);">0</div>
-            </div>
-            <div class="metric-card" style="flex-grow: 1; display: flex; flex-direction: column; justify-content: center;">
-                <div class="metric-title">System Health</div>
-                <div style="font-size: 1.1rem; color: #facc15; font-weight: 500; margin-top: 5px;">Optimal & Secure</div>
-                <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 5px;">Auto-syncing every 4s</div>
-            </div>
-        </div>
+        <!-- Top Section: Metrics & Deals Feeds -->
+        <div class="top-section">
+            
+            <!-- Metrics Column -->
+            <div class="metrics-col">
+                <div class="metric-card">
+                    <div class="metric-title">Deals Scanned</div>
+                    <div class="metric-value" id="scannedCount">0</div>
+                </div>
+                
+                <div class="metric-card">
+                    <div class="metric-title">Telegram Posted</div>
+                    <div class="metric-value" id="postedCount" style="color: var(--accent-blue);">0</div>
+                </div>
 
-        <div class="feed-container">
-            <div class="feed-header">
-                <h2>🔍 Live Scanned Stream</h2>
-                <span style="font-size: 0.75rem; color: var(--text-muted);" id="scanCountBadge">0 items</span>
-            </div>
-            <div class="feed-list" id="scannedList">
-                <div class="deal-card scanned">
-                    <div class="deal-title">Listening for incoming channel broadcasts...</div>
+                <div class="metric-card" style="flex-grow: 1; display: flex; flex-direction: column; justify-content: space-between;">
+                    <div class="metric-title">System Health</div>
+                    <div style="display: flex; flex-direction: column; gap: 3px;">
+                        <div class="health-row">
+                            <span style="color: var(--text-muted);">Channels:</span>
+                            <b id="channelsVal" style="color: var(--accent-blue);">0</b>
+                        </div>
+                        <div class="health-row">
+                            <span style="color: var(--text-muted);">Uptime:</span>
+                            <b id="uptimeVal" style="color: var(--accent-green);">0h 0m</b>
+                        </div>
+                        <div class="health-row">
+                            <span style="color: var(--text-muted);">Cache Size:</span>
+                            <b id="dedupVal" style="color: var(--accent-yellow);">0</b>
+                        </div>
+                    </div>
                 </div>
             </div>
+
+            <!-- Middle Column: Scanned Feed -->
+            <div class="feed-container">
+                <div class="feed-header">
+                    <h2>🔍 Scanned Stream</h2>
+                    <span style="font-size: 0.7rem; color: var(--text-muted);" id="scanCountBadge">0 items</span>
+                </div>
+                <div class="feed-list" id="scannedList">
+                    <div class="deal-card scanned">
+                        <div class="deal-title">Listening for incoming broadcasts...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Posted Feed -->
+            <div class="feed-container">
+                <div class="feed-header">
+                    <h2>📢 Telegram Verified Feed</h2>
+                    <span style="font-size: 0.7rem; color: var(--text-muted);" id="postCountBadge">0 items</span>
+                </div>
+                <div class="feed-list" id="postedList">
+                    <div class="deal-card posted">
+                        <div class="deal-title">Waiting for verified deals...</div>
+                    </div>
+                </div>
+            </div>
+
         </div>
 
-        <div class="feed-container">
-            <div class="feed-header">
-                <h2>📢 Telegram Verified Feed</h2>
-                <span style="font-size: 0.75rem; color: var(--text-muted);" id="postCountBadge">0 items</span>
+        <!-- Bottom Section: Live Terminal Logger -->
+        <div class="terminal-container">
+            <div class="terminal-header">
+                <span>💻 Live System Console Logs</span>
+                <span style="font-size: 0.7rem; color: var(--text-muted);" id="logCountBadge">0 logs</span>
             </div>
-            <div class="feed-list" id="postedList">
-                <div class="deal-card posted">
-                    <div class="deal-title">Waiting for verified deals to publish...</div>
+            <div class="terminal-body" id="terminalLogs">
+                <div class="log-line">
+                    <span class="log-time">[--:--:--]</span>
+                    <span class="log-info">Initializing console logger stream...</span>
                 </div>
             </div>
         </div>
@@ -292,10 +364,15 @@
                 let data = await response.json();
                 
                 document.getElementById('scannedCount').innerText = data.deals_scanned;
-                
+                document.getElementById('postedCount').innerText = data.posted_deals ? data.posted_deals.length : 0;
+                document.getElementById('channelsVal').innerText = data.channels_count || 0;
+                document.getElementById('uptimeVal').innerText = data.uptime || '0s';
+                document.getElementById('dedupVal').innerText = data.dedup_size || 0;
+
+                // Scanned Feed
                 if (data.recent_deals) {
                     document.getElementById('scanCountBadge').innerText = `${data.recent_deals.length} items`;
-                    let scannedContainer = document.getElementById('scannedList');
+                    let container = document.getElementById('scannedList');
                     if (data.recent_deals.length > 0) {
                         let html = '';
                         data.recent_deals.forEach(deal => {
@@ -314,14 +391,14 @@
                                 </div>
                             `;
                         });
-                        scannedContainer.innerHTML = html;
+                        container.innerHTML = html;
                     }
                 }
 
+                // Posted Feed
                 if (data.posted_deals) {
-                    document.getElementById('postedCount').innerText = data.posted_deals.length;
                     document.getElementById('postCountBadge').innerText = `${data.posted_deals.length} items`;
-                    let postedContainer = document.getElementById('postedList');
+                    let container = document.getElementById('postedList');
                     if (data.posted_deals.length > 0) {
                         let html = '';
                         data.posted_deals.forEach(deal => {
@@ -340,7 +417,26 @@
                                 </div>
                             `;
                         });
-                        postedContainer.innerHTML = html;
+                        container.innerHTML = html;
+                    }
+                }
+
+                // Terminal Logs
+                if (data.recent_logs) {
+                    document.getElementById('logCountBadge').innerText = `${data.recent_logs.length} logs`;
+                    let terminal = document.getElementById('terminalLogs');
+                    if (data.recent_logs.length > 0) {
+                        let html = '';
+                        data.recent_logs.forEach(log => {
+                            let logClass = log.is_error ? 'log-error' : 'log-info';
+                            html += `
+                                <div class="log-line">
+                                    <span class="log-time">[${log.time}]</span>
+                                    <span class="${logClass}">${log.prefix} ${log.msg}</span>
+                                </div>
+                            `;
+                        });
+                        terminal.innerHTML = html;
                     }
                 }
             } catch (err) {
@@ -348,7 +444,7 @@
             }
         }
 
-        setInterval(fetchStats, 4000);
+        setInterval(fetchStats, 3000);
         fetchStats();
     </script>
 </body>

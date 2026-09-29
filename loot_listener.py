@@ -6,6 +6,7 @@ import os
 import re
 import time
 import traceback
+import logging
 from collections import OrderedDict, deque
 from typing import Optional
 from dataclasses import asdict
@@ -21,8 +22,11 @@ from deal_validator import validate_deal
 from deal_models import Verdict
 from deal_sources import get_offer_price, resolve_url, canonical_url
 
+# Suppress Flask/Werkzeug HTTP access logs (GET /stats 200 clutter)
+werkzeug_logger = logging.getLogger('werkzeug')
+werkzeug_logger.setLevel(logging.ERROR)
 
-VERSION = "4.7"
+VERSION = "5.1"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -50,9 +54,12 @@ sem = asyncio.Semaphore(MAX_CONCURRENCY)
 
 seen = OrderedDict()
 
+START_TIME = time.time()
+CHANNELS_COUNT = 0
 DEALS_SCANNED = 0
 RECENT_DEALS = deque(maxlen=15)
 POSTED_DEALS = deque(maxlen=15)
+RECENT_LOGS = deque(maxlen=35)
 
 app = Flask(__name__)
 
@@ -60,12 +67,24 @@ app = Flask(__name__)
 def index():
     return render_template("index.html")
 
+def get_uptime_string() -> str:
+    seconds = int(time.time() - START_TIME)
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours}h {minutes}m"
+
 @app.route("/stats")
 def stats():
     return jsonify({
         "deals_scanned": DEALS_SCANNED,
         "recent_deals": list(RECENT_DEALS),
-        "posted_deals": list(POSTED_DEALS)
+        "posted_deals": list(POSTED_DEALS),
+        "recent_logs": list(RECENT_LOGS),
+        "channels_count": CHANNELS_COUNT,
+        "uptime": get_uptime_string(),
+        "dedup_size": len(seen),
+        "concurrency": MAX_CONCURRENCY,
+        "version": VERSION
     })
 
 def run_web():
@@ -117,8 +136,18 @@ def title_from(text: str) -> str:
 
 async def log(msg: str, error: bool = False):
     prefix = "❌" if error else "ℹ️"
-    line = f"[{datetime.now().astimezone().isoformat(timespec='seconds')}] {prefix} {msg}"
+    timestamp = datetime.now().astimezone().strftime("%H:%M:%S")
+    line = f"[{timestamp}] {prefix} {msg}"
     print(line)
+    
+    global RECENT_LOGS
+    RECENT_LOGS.appendleft({
+        "time": timestamp,
+        "prefix": prefix,
+        "msg": msg,
+        "is_error": error
+    })
+
     if LOG_CHANNEL:
         try:
             await client.send_message(LOG_CHANNEL, line)
@@ -137,7 +166,6 @@ async def send_result(result, source, title, price, final_url):
     if result.verdict not in {Verdict.DEAL, Verdict.POSSIBLE_DEAL}:
         return
 
-    # Extract Min & Avg price from evidence items if available
     evidence_prices = [item.price for item in result.evidence if item.price and item.price > 0]
     evidence_lows = [item.historical_low for item in result.evidence if item.historical_low and item.historical_low > 0]
     all_prices = evidence_prices + evidence_lows
@@ -161,7 +189,6 @@ async def send_result(result, source, title, price, final_url):
     if not POSTED_DEALS or POSTED_DEALS[0]["url"] != final_url:
         POSTED_DEALS.appendleft(posted_item)
 
-    # Also update min/avg in RECENT_DEALS if found there
     for deal in RECENT_DEALS:
         if deal["url"] == final_url:
             deal["min_price"] = min_price_str
@@ -214,6 +241,8 @@ async def process_message(event):
     first_url = found[0] if found else None
 
     price = await asyncio.to_thread(get_offer_price, text, first_url)
+    price_status = f"₹{price}" if price else "Not Found"
+    await log(f"{source} | TG Price: {price_status} | {title[:40]}")
 
     if price and price < MIN_PRICE:
         return
@@ -250,11 +279,17 @@ async def process_message(event):
                     validate_deal(title, price, final_url, source, text),
                     timeout=45,
                 )
+
+                evidence_prices = [item.price for item in result.evidence if item.price and item.price > 0]
+                evidence_lows = [item.historical_low for item in result.evidence if item.historical_low and item.historical_low > 0]
+                all_prices = evidence_prices + evidence_lows
+                min_found = f"₹{min(all_prices):,.0f}" if all_prices else "Not Found"
+
                 await log(
                     f"{source} | {result.verdict.value} | "
-                    f"{title[:80]} | ₹{price if price else 'N/A'} | "
-                    f"{result.reason}"
+                    f"MinRef: {min_found} | {result.reason[:50]}"
                 )
+                
                 await send_result(result, source, title, price, final_url)
             except asyncio.TimeoutError:
                 await log(f"Validation timeout: {url}", error=True)
@@ -285,16 +320,18 @@ async def on_edited_message(event):
 async def heartbeat():
     while True:
         await asyncio.sleep(HEARTBEAT_SECONDS)
-        await log(f"HEARTBEAT v{VERSION} | scanned={DEALS_SCANNED} | posted={len(POSTED_DEALS)} | dedup={len(seen)}")
+        await log(f"HEARTBEAT v{VERSION} | scanned={DEALS_SCANNED} | posted={len(POSTED_DEALS)} | channels={CHANNELS_COUNT} | uptime={get_uptime_string()}")
 
 
 async def discover():
+    global CHANNELS_COUNT
     dialogs = await client.get_dialogs()
     count = 0
     for dialog in dialogs:
         entity = dialog.entity
         if getattr(entity, "broadcast", False):
             count += 1
+    CHANNELS_COUNT = count
     await log(f"Listening to {count} broadcast channels")
 
 
