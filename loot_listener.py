@@ -22,7 +22,7 @@ from deal_models import Verdict
 from deal_sources import get_offer_price, resolve_url, canonical_url
 
 
-VERSION = "4.6"
+VERSION = "4.7"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -50,7 +50,6 @@ sem = asyncio.Semaphore(MAX_CONCURRENCY)
 
 seen = OrderedDict()
 
-# Dual Queues for Dashboard
 DEALS_SCANNED = 0
 RECENT_DEALS = deque(maxlen=15)
 POSTED_DEALS = deque(maxlen=15)
@@ -138,18 +137,35 @@ async def send_result(result, source, title, price, final_url):
     if result.verdict not in {Verdict.DEAL, Verdict.POSSIBLE_DEAL}:
         return
 
-    # Add to Posted Deals Queue when successfully verified & sent
+    # Extract Min & Avg price from evidence items if available
+    evidence_prices = [item.price for item in result.evidence if item.price and item.price > 0]
+    evidence_lows = [item.historical_low for item in result.evidence if item.historical_low and item.historical_low > 0]
+    all_prices = evidence_prices + evidence_lows
+
+    min_price_str = f"₹{min(all_prices):,.0f}" if all_prices else "-"
+    avg_price_str = f"₹{sum(all_prices)/len(all_prices):,.0f}" if all_prices else "-"
+
     global POSTED_DEALS
-    price_display = price if price else "N/A"
+    price_display = f"₹{price:,.0f}" if isinstance(price, (int, float)) else (price if price else "N/A")
+    
     posted_item = {
         "title": title[:100],
         "price": price_display,
+        "min_price": min_price_str,
+        "avg_price": avg_price_str,
         "source": source,
         "url": final_url,
         "time": datetime.now().strftime("%H:%M:%S")
     }
+    
     if not POSTED_DEALS or POSTED_DEALS[0]["url"] != final_url:
         POSTED_DEALS.appendleft(posted_item)
+
+    # Also update min/avg in RECENT_DEALS if found there
+    for deal in RECENT_DEALS:
+        if deal["url"] == final_url:
+            deal["min_price"] = min_price_str
+            deal["avg_price"] = avg_price_str
 
     emoji = "🔥" if result.verdict == Verdict.DEAL else "🟡"
     e = result.evidence
@@ -190,7 +206,6 @@ async def process_message(event):
 
     source = f"@{chat.username}" if getattr(chat, "username", None) else str(chat.id)
 
-    # Message-level dedup
     message_key = f"{chat.id}:{event.id}:{hashlib.sha256(text.encode()).hexdigest()[:12]}"
     if not remember_once(message_key):
         return
@@ -208,14 +223,15 @@ async def process_message(event):
         resolved_url = await asyncio.to_thread(resolve_url, first_url)
         deal_url = (await asyncio.to_thread(canonical_url, resolved_url)) if resolved_url else first_url
 
-    # Add to Scanned Deals Queue
     global DEALS_SCANNED, RECENT_DEALS
     DEALS_SCANNED += 1
-    price_display = price if price else "N/A"
+    price_display = f"₹{price:,.0f}" if isinstance(price, (int, float)) else (price if price else "N/A")
     
     new_deal_item = {
         "title": title[:100],
         "price": price_display,
+        "min_price": "-",
+        "avg_price": "-",
         "source": source,
         "url": deal_url,
         "time": datetime.now().strftime("%H:%M:%S")
@@ -300,4 +316,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())	
+    asyncio.run(main())

@@ -32,7 +32,6 @@
             overflow: hidden;
         }
 
-        /* Top Navbar */
         header {
             display: flex;
             justify-content: space-between;
@@ -69,7 +68,7 @@
             background-color: var(--accent-green);
             border-radius: 50%;
             box-shadow: 0 0 8px var(--accent-green);
-            animation: pulse 1.5px infinite;
+            animation: pulse 1.5s infinite;
         }
 
         @keyframes pulse {
@@ -78,7 +77,6 @@
             100% { transform: scale(0.95); opacity: 0.8; }
         }
 
-        /* Main Dashboard Layout */
         .dashboard-grid {
             display: grid;
             grid-template-columns: 300px 1fr 1fr;
@@ -88,7 +86,6 @@
             height: calc(100vh - 70px);
         }
 
-        /* Metrics Column */
         .metrics-col {
             display: flex;
             flex-direction: column;
@@ -117,7 +114,6 @@
             color: var(--accent-green);
         }
 
-        /* Feeds Column */
         .feed-container {
             background: var(--card-bg);
             border: 1px solid var(--border-color);
@@ -193,13 +189,24 @@
             text-decoration: underline;
         }
 
+        .deal-details {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.78rem;
+            color: var(--text-muted);
+            background: rgba(255,255,255,0.02);
+            padding: 6px 8px;
+            border-radius: 6px;
+            margin: 6px 0;
+        }
+
         .deal-footer {
             display: flex;
             justify-content: space-between;
             align-items: center;
             font-size: 0.75rem;
             color: var(--text-muted);
-            margin-top: 8px;
+            margin-top: 6px;
             border-top: 1px solid rgba(255,255,255,0.05);
             padding-top: 6px;
         }
@@ -210,7 +217,6 @@
             font-size: 0.85rem;
         }
 
-        /* Custom Scrollbar */
         ::-webkit-scrollbar {
             width: 6px;
         }
@@ -225,21 +231,18 @@
 </head>
 <body>
 
-    <!-- Top Navigation Bar -->
     <header>
         <div class="brand">
             🔥 Loot Deal Command Center
         </div>
         <div class="system-status">
             <div class="pulse-dot"></div>
-            <span>Bot Engine Active (v4.6)</span>
+            <span>Bot Engine Active (v4.7)</span>
         </div>
     </header>
 
-    <!-- Main Dashboard Grid -->
     <div class="dashboard-grid">
         
-        <!-- Left Sidebar: Metrics -->
         <div class="metrics-col">
             <div class="metric-card">
                 <div class="metric-title">Total Deals Scanned</div>
@@ -256,7 +259,6 @@
             </div>
         </div>
 
-        <!-- Middle Column: Live Scanned Feed -->
         <div class="feed-container">
             <div class="feed-header">
                 <h2>🔍 Live Scanned Stream</h2>
@@ -269,7 +271,6 @@
             </div>
         </div>
 
-        <!-- Right Column: Live Posted Feed -->
         <div class="feed-container">
             <div class="feed-header">
                 <h2>📢 Telegram Verified Feed</h2>
@@ -290,7 +291,6 @@
                 let response = await fetch('/stats');
                 let data = await response.json();
                 
-                // Counters update
                 document.getElementById('scannedCount').innerText = data.deals_scanned;
                 
                 if (data.recent_deals) {
@@ -303,8 +303,12 @@
                             html += `
                                 <div class="deal-card scanned">
                                     <div class="deal-title"><a href="${deal.url}" target="_blank">${deal.title}</a></div>
+                                    <div class="deal-details">
+                                        <span>Min: <b style="color:#f8fafc;">${deal.min_price}</b></span>
+                                        <span>Avg: <b style="color:#f8fafc;">${deal.avg_price}</b></span>
+                                    </div>
                                     <div class="deal-footer">
-                                        <span class="deal-price">${priceText}</span>
+                                        <span class="deal-price">Price: ${priceText}</span>
                                         <span>${deal.source} • ${deal.time}</span>
                                     </div>
                                 </div>
@@ -325,8 +329,12 @@
                             html += `
                                 <div class="deal-card posted">
                                     <div class="deal-title"><a href="${deal.url}" target="_blank">${deal.title}</a></div>
+                                    <div class="deal-details">
+                                        <span>Min: <b style="color:#f8fafc;">${deal.min_price}</b></span>
+                                        <span>Avg: <b style="color:#f8fafc;">${deal.avg_price}</b></span>
+                                    </div>
                                     <div class="deal-footer">
-                                        <span class="deal-price">${priceText}</span>
+                                        <span class="deal-price">Price: ${priceText}</span>
                                         <span>${deal.source} • ${deal.time}</span>
                                     </div>
                                 </div>
