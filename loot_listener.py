@@ -18,7 +18,7 @@ from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from flask import Flask, jsonify, render_template, request
 import threading
-import openai
+from groq import Groq  # Groq client for LLM search
 
 from deal_validator import validate_deal
 from deal_models import Verdict
@@ -28,7 +28,7 @@ from deal_sources import get_offer_price, resolve_url, canonical_url
 werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.ERROR)
 
-VERSION = "5.9.2"
+VERSION = "6.0"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -48,9 +48,9 @@ MAX_CONCURRENCY = int(os.getenv("MAX_CONCURRENCY", "6"))
 DEDUP_TTL_SECONDS = int(os.getenv("DEDUP_TTL_SECONDS", "21600"))
 HEARTBEAT_SECONDS = int(os.getenv("HEARTBEAT_SECONDS", "120"))
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-if OPENAI_API_KEY:
-    openai.api_key = OPENAI_API_KEY
+# Initialize Groq Client using your GROQ_API_KEY from Railway variables
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 if not API_ID or not API_HASH or not TG_SESSION:
     raise RuntimeError("TG_API_ID, TG_API_HASH and TG_SESSION are required")
@@ -163,24 +163,26 @@ def search_db():
             matched_deals.append(deal_obj)
             deals_context.append(f"- Title: {title} | Price: {price} | Source: {source} | URL: {url}")
 
+        # --- GROQ LLM INTELLIGENT SEARCH RESPONSE ---
         ai_answer = ""
-        if OPENAI_API_KEY and deals_context:
+        if groq_client and deals_context:
             try:
                 context_str = "\n".join(deals_context)
                 prompt = (
-                    f"You are an AI deal assistant for a Telegram loot channel. "
+                    f"You are an AI shopping and deal assistant for a Telegram loot channel. "
                     f"The user is searching for: '{query}'.\n"
                     f"Here are the matching/recent deals from the database:\n{context_str}\n\n"
                     f"Provide a helpful, friendly, and concise response summarizing the best matching deals, comparing prices if possible, and answering the user's query like an expert shopping assistant."
                 )
-                response = openai.chat.completions.create(
-                    model="gpt-3.5-turbo",
+                completion = groq_client.chat.completions.create(
+                    model="llama3-70b-8192",  # Fast and smart Groq model
                     messages=[{"role": "user", "content": prompt}],
                     max_tokens=250,
                     temperature=0.7
                 )
-                ai_answer = response.choices[0].message.content.strip()
+                ai_answer = completion.choices[0].message.content.strip()
             except Exception as llm_err:
+                print(f"Groq LLM Error: {llm_err}")
                 ai_answer = f"Found {len(matched_deals)} relevant deals matching your search."
         else:
             ai_answer = f"Here are the top deals found for '{query}':" if matched_deals else "No matching deals found in the database."
@@ -407,7 +409,7 @@ async def send_result(result, source, title, price, final_url):
         lines.append("• " + " | ".join(bits))
 
     for warning in result.warnings:
-        lines.append(f"⚠ {warning}")
+        lines.append(f"⚠️ {warning}")
 
     lines += ["", f"📢 {result.offer.source}", f"🔗 {result.offer.url}"]
     await client.send_message(DESTINATION, "\n".join(lines))
