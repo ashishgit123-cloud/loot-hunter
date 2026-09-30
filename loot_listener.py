@@ -18,6 +18,7 @@ from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from flask import Flask, jsonify, render_template, request
 import threading
+import openai
 
 from deal_validator import validate_deal
 from deal_models import Verdict
@@ -27,7 +28,7 @@ from deal_sources import get_offer_price, resolve_url, canonical_url
 werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.ERROR)
 
-VERSION = "5.8"
+VERSION = "5.9.1"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -46,6 +47,10 @@ MIN_PRICE = float(os.getenv("MIN_PRICE", "1000"))
 MAX_CONCURRENCY = int(os.getenv("MAX_CONCURRENCY", "6"))
 DEDUP_TTL_SECONDS = int(os.getenv("DEDUP_TTL_SECONDS", "21600"))
 HEARTBEAT_SECONDS = int(os.getenv("HEARTBEAT_SECONDS", "120"))
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+if OPENAI_API_KEY:
+    openai.api_key = OPENAI_API_KEY
 
 if not API_ID or not API_HASH or not TG_SESSION:
     raise RuntimeError("TG_API_ID, TG_API_HASH and TG_SESSION are required")
@@ -117,7 +122,7 @@ def stats():
 def search_db():
     query = request.args.get("q", "").strip()
     if not query:
-        return jsonify([])
+        return jsonify({"answer": "Please enter a search query.", "deals": []})
     
     try:
         purge_old_deals()
@@ -126,17 +131,27 @@ def search_db():
         cursor.execute("""
             SELECT title, price, min_price, avg_price, source, url, timestamp 
             FROM historical_deals 
-            WHERE title LIKE ? 
+            WHERE title LIKE ? OR source LIKE ?
             ORDER BY timestamp DESC 
             LIMIT 10
-        """, (f"%{query}%",))
+        """, (f"%{query}%", f"%{query}%"))
         rows = cursor.fetchall()
+        
+        if not rows:
+            cursor.execute("""
+                SELECT title, price, min_price, avg_price, source, url, timestamp 
+                FROM historical_deals 
+                ORDER BY timestamp DESC 
+                LIMIT 5
+            """)
+            rows = cursor.fetchall()
         conn.close()
         
         matched_deals = []
+        deals_context = []
         for row in rows:
             title, price, min_price, avg_price, source, url, timestamp = row
-            matched_deals.append({
+            deal_obj = {
                 "title": title[:100],
                 "price": price,
                 "min_price": min_price,
@@ -144,11 +159,39 @@ def search_db():
                 "source": source,
                 "url": url,
                 "time": datetime.fromtimestamp(timestamp).strftime("%H:%M:%S")
-            })
-        return jsonify(matched_deals)
+            }
+            matched_deals.append(deal_obj)
+            deals_context.append(f"- Title: {title} | Price: {price} | Source: {source} | URL: {url}")
+
+        ai_answer = ""
+        if OPENAI_API_KEY and deals_context:
+            try:
+                context_str = "\n".join(deals_context)
+                prompt = (
+                    f"You are an AI deal assistant for a Telegram loot channel. "
+                    f"The user is searching for: '{query}'.\n"
+                    f"Here are the matching/recent deals from the database:\n{context_str}\n\n"
+                    f"Provide a helpful, friendly, and concise response summarizing the best matching deals, comparing prices if possible, and answering the user's query like an expert shopping assistant."
+                )
+                response = openai.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=250,
+                    temperature=0.7
+                )
+                ai_answer = response.choices[0].message.content.strip()
+            except Exception as llm_err:
+                ai_answer = f"Found {len(matched_deals)} relevant deals matching your search."
+        else:
+            ai_answer = f"Here are the top deals found for '{query}':" if matched_deals else "No matching deals found in the database."
+
+        return jsonify({
+            "answer": ai_answer,
+            "deals": matched_deals
+        })
     except Exception as e:
         print(f"Search API error: {e}")
-        return jsonify([])
+        return jsonify({"answer": "An error occurred while processing your search.", "deals": []})
 
 def run_web():
     port = int(os.getenv("PORT", "5000"))
@@ -156,7 +199,6 @@ def run_web():
 
 
 def purge_old_deals():
-    """Automatically purges deals older than 2 days from SQLite."""
     try:
         cutoff = time.time() - DEAL_TTL_SECONDS
         conn = sqlite3.connect(DB_FILE)
@@ -169,7 +211,6 @@ def purge_old_deals():
 
 
 def is_deal_already_processed(deal_url: str) -> bool:
-    """Checks if the deal URL was already scanned/posted within DEDUP_TTL_SECONDS from any channel."""
     if not deal_url:
         return False
     try:
@@ -207,7 +248,6 @@ def save_deal_to_sqlite(deal_id: str, title: str, price: any, source: str, url: 
 
 
 def load_deals_from_sqlite_on_startup():
-    """Restores recent deals from SQLite into memory queues on boot."""
     try:
         purge_old_deals()
         conn = sqlite3.connect(DB_FILE)
@@ -413,7 +453,6 @@ async def process_message(event):
             await log(f"⚠️ [{source}] URL resolution failed for {first_url}: {e}. Falling back to raw URL.", error=True)
             deal_url = first_url
 
-    # --- CROSS-CHANNEL DUPLICATE CHECK FROM DATABASE ---
     if deal_url and await asyncio.to_thread(is_deal_already_processed, deal_url):
         await log(f"⏭️ [{source}] Skipped: Deal URL already processed/posted from another channel.", error=True)
         return
@@ -488,7 +527,6 @@ async def on_new_message(event):
 async def on_edited_message(event):
     try:
         await process_message(event)
-    currentException = exc
     except Exception as exc:
         await log(f"MessageEdited error: {type(exc).__name__}: {exc}", error=True)
 
