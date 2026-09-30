@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import os
 import re
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from bot_pipeline import process_incoming_deal
 
-# --- ENVIRONMENT CONFIGURATION (Mapping with your Railway Variables) ---
+# --- ENVIRONMENT CONFIGURATION ---
 raw_api_id = os.getenv("TG_API_ID")
 API_HASH = os.getenv("TG_API_HASH")
 SESSION_STRING = os.getenv("TG_SESSION")
@@ -20,13 +22,11 @@ if not raw_api_id or not API_HASH:
 
 API_ID = int(raw_api_id)
 
-# Multiple channels comma-separated format mein read honge
 channels_env = os.getenv("SOURCE_CHANNEL", "")
 SOURCE_CHANNELS = [ch.strip() for ch in channels_env.split(",") if ch.strip()]
-
 OUTPUT_CHANNEL = os.getenv("DESTINATION_CHANNEL", "")
 
-# Initialize Telethon Client using your TG_SESSION
+# Initialize Telethon Client
 if SESSION_STRING:
     print("🔐 Using Telegram Session String from Railway...")
     client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
@@ -36,43 +36,28 @@ else:
 
 
 def extract_price_from_text(text: str) -> float:
-    """
-    Extracts price from Telegram message text using regex.
-    """
     if not text:
         return 0.0
-        
     patterns = [
         r'(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d+)?)',
         r'price\s*[:\-]?\s*(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d+)?)'
     ]
-    
     for pattern in patterns:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
-            price_str = match.group(1).replace(",", "")
             try:
-                return float(price_str)
+                return float(match.group(1).replace(",", ""))
             except ValueError:
                 continue
-                
     numbers = re.findall(r'\b[1-9]\d{2,5}\b', text)
-    if numbers:
-        return float(numbers[0])
-        
-    return 0.0
+    return float(numbers[0]) if numbers else 0.0
 
 
 def extract_url_from_text(text: str) -> str:
-    """
-    Extracts the first valid URL from message text.
-    """
     if not text:
         return ""
     url_match = re.search(r'(https?://\S+)', text)
-    if url_match:
-        return url_match.group(1).strip(".,")
-    return ""
+    return url_match.group(1).strip(".,") if url_match else ""
 
 
 @client.on(events.NewMessage(chats=SOURCE_CHANNELS))
@@ -82,12 +67,9 @@ async def handle_new_loot_message(event):
         return
         
     print(f"\n📥 New message received from source channel...")
-    
-    # 1. Extract URL and Price from raw message text
     short_url = extract_url_from_text(message_text)
     current_price = extract_price_from_text(message_text)
     
-    # Use first non-empty line as product title candidate
     lines = [line.strip() for line in message_text.split('\n') if line.strip()]
     product_title = lines[0] if lines else "Unknown Product"
     
@@ -95,10 +77,8 @@ async def handle_new_loot_message(event):
         print("⚠️ No valid URL found in message. Skipping.")
         return
         
-    # 2. Run through Pipeline (Resolution -> Whitelist Filter -> SQLite 30-Day History)
     result = process_incoming_deal(short_url, product_title, current_price)
     
-    # 3. If approved, broadcast to your target destination channel
     if result["status"] == "approved":
         historical_min = result["historical_min"]
         resolved_link = result["resolved_url"]
@@ -118,8 +98,33 @@ async def handle_new_loot_message(event):
             print(f"❌ Failed to send Telegram message: {e}")
 
 
+# --- DUMMY HTTP SERVER FOR RAILWAY HEALTH CHECKS ---
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Loot Bot is active and running!")
+
+    def log_message(self, format, *args):
+        # Suppress routine HTTP log spam in console
+        return
+
+def run_health_server():
+    port = int(os.getenv("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    print(f"🌐 Health check server running on port {port}...")
+    server.serve_forever()
+
+
 def main():
     print("🤖 Starting Telegram Loot Bot Listener...")
+    
+    # Start the dummy HTTP server in a background thread so Railway is satisfied
+    server_thread = threading.Thread(target=run_health_server, daemon=True)
+    server_thread.start()
+    
+    # Start Telethon client
     client.start()
     print("✨ Bot is active and listening to target channels...")
     client.run_until_disconnected()
