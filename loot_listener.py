@@ -4,20 +4,35 @@ from __future__ import annotations
 import os
 import re
 from telethon import TelegramClient, events
+from telethon.sessions import StringSession
 from bot_pipeline import process_incoming_deal
 
 # --- ENVIRONMENT CONFIGURATION (Railway Variables) ---
-API_ID = int(os.getenv("API_ID", "0"))
-API_HASH = os.getenv("API_HASH", "")
-PHONE_NUMBER = os.getenv("PHONE_NUMBER", "")
+raw_api_id = os.getenv("API_ID")
+API_HASH = os.getenv("API_HASH")
+SESSION_STRING = os.getenv("SESSION_STRING", "")
 
-# Multiple channels comma-separated format mein read honge (e.g., channel1,channel2)
+if not raw_api_id or not API_HASH:
+    raise ValueError(
+        "❌ CRITICAL ERROR: API_ID or API_HASH environment variables are missing! "
+        "Please set them in your Railway project variables tab."
+    )
+
+API_ID = int(raw_api_id)
+
+# Multiple channels comma-separated format mein read honge
 channels_env = os.getenv("SOURCE_CHANNELS", "")
 SOURCE_CHANNELS = [ch.strip() for ch in channels_env.split(",") if ch.strip()]
 
 OUTPUT_CHANNEL = os.getenv("OUTPUT_CHANNEL", "")
 
-client = TelegramClient("loot_bot_session", API_ID, API_HASH)
+# Initialize Telethon Client (Supports StringSession from env or fallback session file)
+if SESSION_STRING:
+    print("🔐 Using Telegram Session String from Environment Variables...")
+    client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+else:
+    print("📁 Using local session file...")
+    client = TelegramClient("loot_bot_session", API_ID, API_HASH)
 
 
 def extract_price_from_text(text: str) -> float:
@@ -80,7 +95,7 @@ async def handle_new_loot_message(event):
         print("⚠️ No valid URL found in message. Skipping.")
         return
         
-    # 2. Run through Pipeline (Resolution -> Whitelist Filter -> 30-Day ChromaDB History)
+    # 2. Run through Pipeline (Resolution -> Whitelist Filter -> SQLite 30-Day History)
     result = process_incoming_deal(short_url, product_title, current_price)
     
     # 3. If approved, broadcast to your target output channel
@@ -104,12 +119,9 @@ async def handle_new_loot_message(event):
 
 
 def main():
-    if not API_ID or not API_HASH:
-        print("❌ Error: API_ID or API_HASH environment variables are missing!")
-        return
-        
     print("🤖 Starting Telegram Loot Bot Listener...")
-    client.start(phone=PHONE_NUMBER)
+    # client.start() does not require phone number if session string or session file is already authorized
+    client.start()
     print("✨ Bot is active and listening to target channels...")
     client.run_until_disconnected()
 
