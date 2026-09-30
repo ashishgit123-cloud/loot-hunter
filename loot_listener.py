@@ -28,7 +28,7 @@ from deal_sources import get_offer_price, resolve_url, canonical_url
 werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.ERROR)
 
-VERSION = "5.9.1"
+VERSION = "5.9.2"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -407,7 +407,7 @@ async def send_result(result, source, title, price, final_url):
         lines.append("• " + " | ".join(bits))
 
     for warning in result.warnings:
-        lines.append(f"⚠️️ {warning}")
+        lines.append(f"⚠ {warning}")
 
     lines += ["", f"📢 {result.offer.source}", f"🔗 {result.offer.url}"]
     await client.send_message(DESTINATION, "\n".join(lines))
