@@ -1,13 +1,16 @@
-# loot_listener.py
+# app.py (Ya jo bhi aapki main Flask file ka naam ho)
 from __future__ import annotations
 
 import os
 import re
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from flask import Flask, render_template, jsonify
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from bot_pipeline import process_incoming_deal
+
+# --- FLASK APP INITIALIZATION ---
+app = Flask(__name__)
 
 # --- ENVIRONMENT CONFIGURATION ---
 raw_api_id = os.getenv("TG_API_ID")
@@ -35,6 +38,7 @@ else:
     client = TelegramClient("loot_bot_session", API_ID, API_HASH)
 
 
+# --- TEXT EXTRACTION HELPERS ---
 def extract_price_from_text(text: str) -> float:
     if not text:
         return 0.0
@@ -60,6 +64,7 @@ def extract_url_from_text(text: str) -> str:
     return url_match.group(1).strip(".,") if url_match else ""
 
 
+# --- TELEGRAM EVENT LISTENER ---
 @client.on(events.NewMessage(chats=SOURCE_CHANNELS))
 async def handle_new_loot_message(event):
     message_text = event.message.message
@@ -98,37 +103,30 @@ async def handle_new_loot_message(event):
             print(f"❌ Failed to send Telegram message: {e}")
 
 
-# --- DUMMY HTTP SERVER FOR RAILWAY HEALTH CHECKS ---
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain")
-        self.end_headers()
-        self.wfile.write(b"Loot Bot is active and running!")
+# --- FLASK ROUTES ---
+@app.route('/')
+def home():
+    # Aapka index page render hoga (templates folder ke andar hona chahiye)
+    return render_template('index.html')
 
-    def log_message(self, format, *args):
-        # Suppress routine HTTP log spam in console
-        return
-
-def run_health_server():
-    port = int(os.getenv("PORT", 8080))
-    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
-    print(f"🌐 Health check server running on port {port}...")
-    server.serve_forever()
+@app.route('/health')
+def health_check():
+    return jsonify({"status": "healthy", "bot": "running"})
 
 
-def main():
-    print("🤖 Starting Telegram Loot Bot Listener...")
-    
-    # Start the dummy HTTP server in a background thread so Railway is satisfied
-    server_thread = threading.Thread(target=run_health_server, daemon=True)
-    server_thread.start()
-    
-    # Start Telethon client
+# --- BACKGROUND THREAD FOR TELEGRAM BOT ---
+def run_telegram_bot():
+    print("🤖 Starting Telegram Loot Bot in background thread...")
     client.start()
     print("✨ Bot is active and listening to target channels...")
     client.run_until_disconnected()
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    # 1. Telegram bot ko background thread mein start karein
+    bot_thread = threading.Thread(target=run_telegram_bot, daemon=True)
+    bot_thread.start()
+    
+    # 2. Main thread mein Flask web server start karein (Railway PORT ke sath)
+    port = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
