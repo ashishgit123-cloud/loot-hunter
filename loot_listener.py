@@ -27,7 +27,7 @@ from deal_sources import get_offer_price, resolve_url, canonical_url
 werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.ERROR)
 
-VERSION = "5.7"
+VERSION = "5.8"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -166,6 +166,27 @@ def purge_old_deals():
         conn.close()
     except Exception:
         pass
+
+
+def is_deal_already_processed(deal_url: str) -> bool:
+    """Checks if the deal URL was already scanned/posted within DEDUP_TTL_SECONDS from any channel."""
+    if not deal_url:
+        return False
+    try:
+        cutoff = time.time() - DEDUP_TTL_SECONDS
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT 1 FROM historical_deals 
+            WHERE url = ? AND timestamp >= ? 
+            LIMIT 1
+        """, (deal_url, cutoff))
+        row = cursor.fetchone()
+        conn.close()
+        return row is not None
+    except Exception as e:
+        print(f"DB duplicate check error: {e}")
+        return False
 
 
 def save_deal_to_sqlite(deal_id: str, title: str, price: any, source: str, url: str, verdict: str, min_price: str, avg_price: str):
@@ -346,7 +367,7 @@ async def send_result(result, source, title, price, final_url):
         lines.append("• " + " | ".join(bits))
 
     for warning in result.warnings:
-        lines.append(f"⚠️ {warning}")
+        lines.append(f"⚠️️ {warning}")
 
     lines += ["", f"📢 {result.offer.source}", f"🔗 {result.offer.url}"]
     await client.send_message(DESTINATION, "\n".join(lines))
@@ -391,6 +412,11 @@ async def process_message(event):
         except Exception as e:
             await log(f"⚠️ [{source}] URL resolution failed for {first_url}: {e}. Falling back to raw URL.", error=True)
             deal_url = first_url
+
+    # --- CROSS-CHANNEL DUPLICATE CHECK FROM DATABASE ---
+    if deal_url and await asyncio.to_thread(is_deal_already_processed, deal_url):
+        await log(f"⏭️ [{source}] Skipped: Deal URL already processed/posted from another channel.", error=True)
+        return
 
     global DEALS_SCANNED, RECENT_DEALS
     DEALS_SCANNED += 1
@@ -462,6 +488,7 @@ async def on_new_message(event):
 async def on_edited_message(event):
     try:
         await process_message(event)
+    currentException = exc
     except Exception as exc:
         await log(f"MessageEdited error: {type(exc).__name__}: {exc}", error=True)
 
