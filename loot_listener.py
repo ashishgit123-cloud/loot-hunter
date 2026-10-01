@@ -6,7 +6,6 @@ import os
 import re
 import time
 import logging
-import sqlite3
 import json
 import io
 import csv
@@ -22,16 +21,13 @@ import threading
 from groq import Groq
 import requests
 from bs4 import BeautifulSoup
-
-from deal_validator import validate_deal
-from deal_models import Verdict
-from deal_sources import get_offer_price, resolve_url, canonical_url, fetch_product_price
+import psycopg2
 
 # Suppress Flask/Werkzeug HTTP access logs
 werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.ERROR)
 
-VERSION = "6.6"
+VERSION = "6.7"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -39,6 +35,7 @@ API_HASH = os.getenv("TG_API_HASH", "")
 TG_SESSION = os.getenv("TG_SESSION", "")
 DESTINATION = os.getenv("DESTINATION", "lootersAmer")
 LOG_CHANNEL = os.getenv("LOG_CHANNEL", "")
+DATABASE_URL = os.getenv("DATABASE_URL", "")
 
 WATCH_CHANNELS = {
     x.strip().lower().lstrip("@")
@@ -57,22 +54,26 @@ groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 if not API_ID or not API_HASH or not TG_SESSION:
     raise RuntimeError("TG_API_ID, TG_API_HASH and TG_SESSION are required")
 
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is required for PostgreSQL connection")
+
 client = TelegramClient(StringSession(TG_SESSION), API_ID, API_HASH)
 sem = asyncio.Semaphore(MAX_CONCURRENCY)
 
 seen = OrderedDict()
-
-DB_FILE = "loot_history.db"
 DEAL_TTL_SECONDS = 7 * 24 * 60 * 60
 WATCHLIST_FILE = "watchlist.json"
 
+def get_db_connection():
+    return psycopg2.connect(DATABASE_URL)
+
 def init_db():
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS historical_deals (
-                deal_id TEXT PRIMARY KEY,
+                deal_id VARCHAR(64) PRIMARY KEY,
                 title TEXT,
                 price TEXT,
                 min_price TEXT,
@@ -80,7 +81,7 @@ def init_db():
                 source TEXT,
                 url TEXT,
                 verdict TEXT,
-                timestamp REAL
+                timestamp DOUBLE PRECISION
             )
         """)
         conn.commit()
@@ -153,12 +154,12 @@ def search_db():
     
     try:
         purge_old_deals()
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("""
             SELECT title, price, min_price, avg_price, source, url, timestamp 
             FROM historical_deals 
-            WHERE title LIKE ? OR source LIKE ?
+            WHERE title ILIKE %s OR source ILIKE %s
             ORDER BY timestamp DESC 
             LIMIT 15
         """, (f"%{query}%", f"%{query}%"))
@@ -236,7 +237,7 @@ def add_watchlist():
 @app.route("/export")
 def export_deals_csv():
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT deal_id, title, price, min_price, avg_price, source, url, verdict, timestamp FROM historical_deals ORDER BY timestamp DESC")
         rows = cursor.fetchall()
@@ -263,58 +264,77 @@ def run_web():
 def purge_old_deals():
     try:
         cutoff = time.time() - DEAL_TTL_SECONDS
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM historical_deals WHERE timestamp < ?", (cutoff,))
+        cursor.execute("DELETE FROM historical_deals WHERE timestamp < %s", (cutoff,))
         conn.commit()
         conn.close()
     except Exception:
         pass
 
 
-def is_deal_already_processed(deal_url: str) -> bool:
+def check_db_and_compare_price(deal_url: str, current_price: float):
+    """
+    Returns (Should_Skip, min_price_str, avg_price_str) based on DB history.
+    """
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT 1 FROM historical_deals WHERE url = ? LIMIT 1", (deal_url,))
-        row = cursor.fetchone()
+        cursor.execute("SELECT price FROM historical_deals WHERE url = %s", (deal_url,))
+        rows = cursor.fetchall()
         conn.close()
-        return bool(row)
-    except Exception:
-        return False
+
+        if not rows:
+            return False, f"₹{current_price:,.0f}", f"₹{current_price:,.0f}"
+
+        valid_prices = []
+        for row in rows:
+            val = row[0]
+            if val and val not in {"-", "N/A"}:
+                cleaned = re.sub(r'[^\d.]', '', str(val))
+                if cleaned:
+                    valid_prices.append(float(cleaned))
+        
+        if not valid_prices:
+            return False, f"₹{current_price:,.0f}", f"₹{current_price:,.0f}"
+
+        db_min = min(valid_prices)
+        db_avg = sum(valid_prices) / len(valid_prices)
+
+        # Agar nayi price purani minimum price se zyada ya barabar hai, toh avoid karo
+        if current_price >= db_min:
+            return True, f"₹{db_min:,.0f}", f"₹{db_avg:,.0f}"
+        
+        return False, f"₹{db_min:,.0f}", f"₹{db_avg:,.0f}"
+
+    except Exception as e:
+        print(f"DB Compare Error: {e}")
+        return False, "-", "-"
 
 
-def parse_price_to_float(val) -> Optional[float]:
-    if not val or val in {"-", "N/A", "Not Found ❌"}:
-        return None
-    try:
-        cleaned = re.sub(r'[^\d.]', '', str(val))
-        return float(cleaned) if cleaned else None
-    except Exception:
-        return None
-
-
-def save_deal_to_sqlite(deal_id: str, title: str, price: any, source: str, url: str, verdict: str, min_price: str, avg_price: str):
+def save_deal_to_db(deal_id: str, title: str, price: any, source: str, url: str, verdict: str, min_price: str, avg_price: str):
     try:
         purge_old_deals()
         now = time.time()
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT OR REPLACE INTO historical_deals 
+            INSERT INTO historical_deals 
             (deal_id, title, price, min_price, avg_price, source, url, verdict, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (deal_id) DO UPDATE SET 
+            price = EXCLUDED.price, min_price = EXCLUDED.min_price, avg_price = EXCLUDED.avg_price, timestamp = EXCLUDED.timestamp
         """, (deal_id, title, str(price), str(min_price), str(avg_price), source, url, verdict, now))
         conn.commit()
         conn.close()
     except Exception as e:
-        print(f"SQLite save error: {e}")
+        print(f"PostgreSQL save error: {e}")
 
 
-def load_deals_from_sqlite_on_startup():
+def load_deals_from_db_on_startup():
     try:
         purge_old_deals()
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT deal_id, title, price, min_price, avg_price, source, url, verdict, timestamp FROM historical_deals ORDER BY timestamp DESC LIMIT 20")
         rows = cursor.fetchall()
@@ -401,15 +421,9 @@ def channel_allowed(chat) -> bool:
     return username in WATCH_CHANNELS
 
 
-async def send_result(result, source, title, price, final_url):
+async def send_result(result, source, title, price, final_url, min_price_str, avg_price_str):
     if result.verdict not in {Verdict.DEAL, Verdict.POSSIBLE_DEAL}:
         return
-
-    evidence_prices = [item.price for item in result.evidence if item.price and item.price > 50]
-    all_prices = evidence_prices
-
-    min_price_str = f"₹{min(all_prices):,.0f}" if all_prices else "-"
-    avg_price_str = f"₹{sum(all_prices)/len(all_prices):,.0f}" if all_prices else "-"
 
     global POSTED_DEALS
     price_display = f"₹{price:,.0f}" if isinstance(price, (int, float)) else (price if price else "N/A")
@@ -423,12 +437,13 @@ async def send_result(result, source, title, price, final_url):
         POSTED_DEALS.appendleft(posted_item)
 
     deal_id = hashlib.sha256(f"{final_url}:{title}".encode()).hexdigest()[:16]
-    save_deal_to_sqlite(deal_id, title, price_display, source, final_url, result.verdict.value, min_price_str, avg_price_str)
+    save_deal_to_db(deal_id, title, price_display, source, final_url, result.verdict.value, min_price_str, avg_price_str)
 
     emoji = "🔥" if result.verdict == Verdict.DEAL else "🟡"
     lines = [
         f"{emoji} {'VERIFIED DEAL' if result.verdict == Verdict.DEAL else 'POSSIBLE DEAL'}",
         "", f"📦 {result.offer.title}", f"💰 Price: ₹{result.offer.price:,.0f}",
+        f"📉 Min: {min_price_str} | 📊 Avg: {avg_price_str}",
         f"🎯 Confidence: {result.confidence:.0%}", f"🧠 {result.reason}",
         "", f"📢 {result.offer.source}", f"🔗 {result.offer.url}"
     ]
@@ -444,6 +459,7 @@ async def price_tracker_worker():
                     url = item.get("url")
                     if url:
                         try:
+                            from deal_sources import fetch_product_price
                             price_val = await asyncio.to_thread(fetch_product_price, url)
                             if not price_val:
                                 price_val = await asyncio.to_thread(get_offer_price, "", url)
@@ -492,15 +508,20 @@ async def process_message(event):
         except Exception:
             deal_url = first_url
 
-    if deal_url and await asyncio.to_thread(is_deal_already_processed, deal_url):
-        return
+    # Smart DB Price Comparison Logic
+    db_min_str = "-"
+    db_avg_str = "-"
+    if deal_url and price:
+        skip_deal, db_min_str, db_avg_str = await asyncio.to_thread(check_db_and_compare_price, deal_url, price)
+        if skip_deal:
+            return  # Purani history se mehangi deal hai, isliye ignore kar diya!
 
     global DEALS_SCANNED
     DEALS_SCANNED += 1
     price_display = f"₹{price:,.0f}" if isinstance(price, (int, float)) else (price if price else "N/A")
     
     deal_id = hashlib.sha256(f"{deal_url}:{title}".encode()).hexdigest()[:16]
-    save_deal_to_sqlite(deal_id, title, price_display, source, deal_url, "SCANNED", "-", "-")
+    save_deal_to_db(deal_id, title, price_display, source, deal_url, "SCANNED", db_min_str, db_avg_str)
 
     for url in found[:3]:
         async with sem:
@@ -508,7 +529,7 @@ async def process_message(event):
                 res_url = await asyncio.to_thread(resolve_url, url)
                 final_url = (await asyncio.to_thread(canonical_url, res_url)) if res_url else url
                 result = await asyncio.wait_for(validate_deal(title, price, final_url, source, text), timeout=45)
-                await send_result(result, source, title, price, final_url)
+                await send_result(result, source, title, price, final_url, db_min_str, db_avg_str)
             except Exception:
                 pass
 
@@ -529,7 +550,7 @@ async def heartbeat():
 
 async def discover():
     global CHANNELS_COUNT
-    load_deals_from_sqlite_on_startup()
+    load_deals_from_db_on_startup()
     dialogs = await client.get_dialogs()
     count = 0
     for dialog in dialogs:
