@@ -8,6 +8,7 @@ import time
 import traceback
 import logging
 import sqlite3
+import csv
 from collections import OrderedDict, deque
 from typing import Optional
 from dataclasses import asdict
@@ -16,9 +17,9 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, Response
 import threading
-from groq import Groq  # Groq client for LLM search
+from groq import Groq
 
 from deal_validator import validate_deal
 from deal_models import Verdict
@@ -28,7 +29,7 @@ from deal_sources import get_offer_price, resolve_url, canonical_url
 werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.ERROR)
 
-VERSION = "6.0"
+VERSION = "6.1"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -133,7 +134,7 @@ def search_db():
             FROM historical_deals 
             WHERE title LIKE ? OR source LIKE ?
             ORDER BY timestamp DESC 
-            LIMIT 10
+            LIMIT 15
         """, (f"%{query}%", f"%{query}%"))
         rows = cursor.fetchall()
         
@@ -163,7 +164,6 @@ def search_db():
             matched_deals.append(deal_obj)
             deals_context.append(f"- Title: {title} | Price: {price} | Source: {source} | URL: {url}")
 
-        # --- GROQ LLM INTELLIGENT SEARCH RESPONSE ---
         ai_answer = ""
         if groq_client and deals_context:
             try:
@@ -175,7 +175,7 @@ def search_db():
                     f"Provide a helpful, friendly, and concise response summarizing the best matching deals, comparing prices if possible, and answering the user's query like an expert shopping assistant."
                 )
                 completion = groq_client.chat.completions.create(
-                    model="llama3-70b-8192",  # Fast and smart Groq model
+                    model="llama3-70b-8192",
                     messages=[{"role": "user", "content": prompt}],
                     max_tokens=250,
                     temperature=0.7
@@ -194,6 +194,42 @@ def search_db():
     except Exception as e:
         print(f"Search API error: {e}")
         return jsonify({"answer": "An error occurred while processing your search.", "deals": []})
+
+
+# --- CSV EXPORT ENDPOINT FOR UI ---
+@app.route("/export")
+def export_deals_csv():
+    """Exports all SQLite historical deals as a downloadable CSV file."""
+    try:
+        purge_old_deals()
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT deal_id, title, price, min_price, avg_price, source, url, verdict, timestamp 
+            FROM historical_deals 
+            ORDER BY timestamp DESC
+        """)
+        rows = cursor.fetchall()
+        conn.close()
+
+        def generate():
+            yield "Deal ID,Title,Price,Min Price,Avg Price,Source,URL,Verdict,Time\n"
+            for row in rows:
+                deal_id, title, price, min_price, avg_price, source, url, verdict, ts = row
+                time_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+                # Escape quotes in title/source/url
+                safe_title = str(title).replace('"', '""')
+                yield f'"{deal_id}","{safe_title}","{price}","{min_price}","{avg_price}","{source}","{url}","{verdict}","{time_str}"\n'
+
+        return Response(
+            generate(),
+            mimetype="text/csv",
+            headers={"Content-Disposition": "attachment; filename=loot_database_export.csv"}
+        )
+    except Exception as e:
+        print(f"Export CSV error: {e}")
+        return jsonify({"error": "Failed to export database"}), 500
+
 
 def run_web():
     port = int(os.getenv("PORT", "5000"))

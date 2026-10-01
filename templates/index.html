@@ -52,7 +52,7 @@
             color: var(--accent-blue);
         }
 
-        /* Search Bar in Header */
+        /* Search Box in Header */
         .search-box {
             display: flex;
             gap: 8px;
@@ -87,6 +87,28 @@
 
         .search-btn:hover {
             opacity: 0.9;
+        }
+
+        .export-btn {
+            background: var(--accent-green);
+            color: #090d16;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 0.85rem;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .export-btn:hover { opacity: 0.9; }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 15px;
         }
 
         .system-status {
@@ -200,6 +222,18 @@
             gap: 6px;
         }
 
+        /* AI Answer Banner Box */
+        .ai-banner {
+            background: rgba(56, 189, 248, 0.08);
+            border: 1px solid rgba(56, 189, 248, 0.2);
+            padding: 10px 15px;
+            font-size: 0.8rem;
+            color: var(--accent-blue);
+            display: none;
+            border-bottom: 1px solid var(--border-color);
+            line-height: 1.4;
+        }
+
         .feed-list {
             padding: 10px;
             overflow-y: auto;
@@ -304,13 +338,16 @@
         
         <!-- Search DB Input -->
         <div class="search-box">
-            <input type="text" id="searchInput" class="search-input" placeholder="Search DB (e.g., shoe, protein)..." onkeypress="handleSearchKey(event)">
-            <button class="search-btn" onclick="searchDatabase()">Search DB</button>
+            <input type="text" id="searchInput" class="search-input" placeholder="Ask AI or Search DB..." onkeypress="handleSearchKey(event)">
+            <button class="search-btn" onclick="searchDatabase()">Ask AI / Search</button>
         </div>
 
-        <div class="system-status">
-            <div class="pulse-dot"></div>
-            <span>Bot Engine Active (v5.5)</span>
+        <div class="header-right">
+            <a href="/export" class="export-btn">📥 Export CSV</a>
+            <div class="system-status">
+                <div class="pulse-dot"></div>
+                <span>Bot Engine Active (v6.1)</span>
+            </div>
         </div>
     </header>
 
@@ -352,6 +389,10 @@
                 <div class="feed-header">
                     <h2 id="feedTitle">🔍 Scanned Stream</h2>
                     <span style="font-size: 0.7rem; color: var(--text-muted);" id="scanCountBadge">0 items</span>
+                </div>
+                <!-- AI Answer Banner -->
+                <div id="aiBanner" class="ai-banner">
+                    <strong>🧠 AI Assistant:</strong> <span id="aiAnswerText"></span>
                 </div>
                 <div class="feed-list" id="scannedList">
                     <div class="deal-card scanned">
@@ -482,20 +523,32 @@
             if (!query) {
                 isSearching = false;
                 document.getElementById('feedTitle').innerText = "🔍 Scanned Stream";
+                document.getElementById('aiBanner').style.display = "none";
                 fetchStats();
                 return;
             }
 
             isSearching = true;
-            document.getElementById('feedTitle').innerText = `🔎 DB Search: "${query}"`;
+            document.getElementById('feedTitle').innerText = `🔎 AI Search: "${query}"`;
             let container = document.getElementById('scannedList');
-            container.innerHTML = `<div class="deal-card scanned"><div class="deal-title">Searching database...</div></div>`;
+            container.innerHTML = `<div class="deal-card scanned"><div class="deal-title">Querying AI & Database...</div></div>`;
 
             try {
                 let res = await fetch(`/search?q=${encodeURIComponent(query)}`);
-                let results = await res.json();
+                let data = await res.json();
                 
+                // Show AI Answer Box inside the feed
+                let banner = document.getElementById('aiBanner');
+                if (data.answer) {
+                    document.getElementById('aiAnswerText').innerText = data.answer;
+                    banner.style.display = "block";
+                } else {
+                    banner.style.display = "none";
+                }
+
+                let results = data.deals || [];
                 document.getElementById('scanCountBadge').innerText = `${results.length} found`;
+                
                 if (results.length > 0) {
                     let html = '';
                     results.forEach(deal => {
@@ -515,7 +568,7 @@
                     });
                     container.innerHTML = html;
                 } else {
-                    container.innerHTML = `<div class="deal-card scanned"><div class="deal-title">No matching deals found in last 2 days DB.</div></div>`;
+                    container.innerHTML = `<div class="deal-card scanned"><div class="deal-title">No matching deals found in database.</div></div>`;
                 }
             } catch (err) {
                 console.error("Search error:", err);
