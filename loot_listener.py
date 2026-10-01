@@ -28,7 +28,7 @@ import psycopg2
 werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.ERROR)
 
-VERSION = "6.9.2"
+VERSION = "6.9.3"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -240,7 +240,6 @@ def search_db():
     except Exception:
         return jsonify({"answer": "An error occurred.", "deals": []})
 
-
 @app.route("/add_watchlist", methods=["POST"])
 def add_watchlist():
     global WATCHED_ITEMS
@@ -275,7 +274,6 @@ def add_watchlist():
     WATCHED_ITEMS = load_watchlist_from_db()
     return jsonify({"status": "success", "message": f"Added: {product_title}"})
 
-
 @app.route("/export")
 def export_deals_csv():
     try:
@@ -297,11 +295,9 @@ def export_deals_csv():
     except Exception:
         return jsonify({"error": "Failed to export"}), 500
 
-
 def run_web():
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
-
 
 def purge_old_deals():
     try:
@@ -313,42 +309,6 @@ def purge_old_deals():
         conn.close()
     except Exception:
         pass
-
-
-def check_db_and_compare_price(deal_url: str, current_price: float):
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT price FROM historical_deals WHERE url = %s", (deal_url,))
-        rows = cursor.fetchall()
-        conn.close()
-
-        if not rows:
-            return False, f"₹{current_price:,.0f}", f"₹{current_price:,.0f}"
-
-        valid_prices = []
-        for row in rows:
-            val = row[0]
-            if val and val not in {"-", "N/A"}:
-                cleaned = re.sub(r'[^\d.]', '', str(val))
-                if cleaned:
-                    valid_prices.append(float(cleaned))
-        
-        if not valid_prices:
-            return False, f"₹{current_price:,.0f}", f"₹{current_price:,.0f}"
-
-        db_min = min(valid_prices)
-        db_avg = sum(valid_prices) / len(valid_prices)
-
-        if current_price >= db_min:
-            return True, f"₹{db_min:,.0f}", f"₹{db_avg:,.0f}"
-        
-        return False, f"₹{db_min:,.0f}", f"₹{db_avg:,.0f}"
-
-    except Exception as e:
-        print(f"DB Compare Error: {e}")
-        return False, "-", "-"
-
 
 def save_deal_to_db(deal_id: str, title: str, price: any, source: str, url: str, verdict: str, min_price: str, avg_price: str):
     try:
@@ -367,7 +327,6 @@ def save_deal_to_db(deal_id: str, title: str, price: any, source: str, url: str,
         conn.close()
     except Exception as e:
         print(f"PostgreSQL save error: {e}")
-
 
 def load_deals_from_db_on_startup():
     try:
@@ -391,7 +350,6 @@ def load_deals_from_db_on_startup():
     except Exception as e:
         print(f"Cache load error: {e}")
 
-
 def remember_once(key: str) -> bool:
     now = time.time()
     cutoff = now - DEDUP_TTL_SECONDS
@@ -405,7 +363,6 @@ def remember_once(key: str) -> bool:
     seen[key] = now
     return True
 
-
 URL_RE = re.compile(r"https?://[^\s<>]+", re.I)
 
 def urls(text: str) -> list[str]:
@@ -415,7 +372,6 @@ def urls(text: str) -> list[str]:
         if u not in out:
             out.append(u)
     return out
-
 
 def title_from(text: str) -> str:
     lines = [x.strip() for x in (text or "").splitlines() if x.strip()]
@@ -428,6 +384,43 @@ def title_from(text: str) -> str:
         return line[:300]
     return "Unknown Product"
 
+def get_smart_title(text: str, url: Optional[str] = None) -> str:
+    title = title_from(text)
+    is_generic = (
+        not title 
+        or title == "Unknown Product" 
+        or len(title) < 5 
+        or "loot @" in title.lower() 
+        or "deal @" in title.lower()
+        or any(k in title.lower() for k in ["off", "discount", "sale", "upto", "flat"])
+    )
+    
+    if is_generic and url:
+        try:
+            from deal_sources import resolve_url, canonical_url
+            res_url = resolve_url(url)
+            final_url = canonical_url(res_url) if res_url else url
+            
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+            resp = requests.get(final_url, headers=headers, timeout=6)
+            if resp.status_code == 200:
+                soup = BeautifulSoup(resp.text, 'html.parser')
+                scraped_title = ""
+                if soup.find('meta', property='og:title'):
+                    scraped_title = soup.find('meta', property='og:title')['content'].strip()
+                elif soup.find('title'):
+                    scraped_title = soup.find('title').get_text().strip()
+                
+                if scraped_title and len(scraped_title) > 3:
+                    if len(scraped_title) > 100:
+                        scraped_title = scraped_title[:97] + "..."
+                    return scraped_title
+        except Exception as e:
+            print(f"URL Title Scraping Error: {e}")
+            
+    return title
 
 async def log(msg: str, error: bool = False, send_to_telegram: bool = True):
     prefix = "❌" if error else "ℹ️"
@@ -442,7 +435,6 @@ async def log(msg: str, error: bool = False, send_to_telegram: bool = True):
         except Exception:
             pass
 
-
 async def tracker_log(msg: str, error: bool = False):
     prefix = "❌" if error else "⚡"
     timestamp = datetime.now().astimezone().strftime("%H:%M:%S")
@@ -451,7 +443,6 @@ async def tracker_log(msg: str, error: bool = False):
     global TRACKER_LOGS
     TRACKER_LOGS.appendleft({"time": timestamp, "prefix": prefix, "msg": msg, "is_error": error})
 
-
 def channel_allowed(chat) -> bool:
     if not WATCH_CHANNELS:
         return True
@@ -459,8 +450,6 @@ def channel_allowed(chat) -> bool:
     chat_id_str = str(chat.id)
     return username in WATCH_CHANNELS or chat_id_str in WATCH_CHANNELS
 
-
-# Safe validate_deal fallback helper
 async def validate_deal(title, price, final_url, source, text) -> DealResult:
     offer = Offer(title=title, price=price or 0, url=final_url, source=source)
     return DealResult(
@@ -470,9 +459,7 @@ async def validate_deal(title, price, final_url, source, text) -> DealResult:
         offer=offer
     )
 
-
 async def send_result(result, source, title, price, final_url, min_price_str, avg_price_str):
-    # Strict Check: Agar price valid number nahi hai ya N/A hai, toh kabhi post mat karo
     if not isinstance(price, (int, float)) or price <= 0:
         return
 
@@ -507,7 +494,6 @@ async def send_result(result, source, title, price, final_url, min_price_str, av
         except Exception:
             pass
 
-
 async def price_tracker_worker():
     while True:
         try:
@@ -528,21 +514,25 @@ async def price_tracker_worker():
                             save_watchlist_item_to_db(title, url, price_display)
                         except Exception:
                             pass
-                await tracker_log("Checked and updated all database watchlist items successfully.")
+                    await tracker_log("Checked and updated all database watchlist items successfully.")
         except Exception as e:
             await tracker_log(f"Tracker error: {str(e)}", error=True)
         
         await asyncio.sleep(60)
 
-
 async def process_message(event):
     chat = await event.get_chat()
+    chat_identifier = getattr(chat, "username", None) or str(chat.id)
+    print(f"📥 Message received from chat: {chat_identifier}")
+
     if not channel_allowed(chat):
+        print(f"⚠️ Channel {chat_identifier} is not in WATCH_CHANNELS filter list!")
         return
 
     text = event.raw_text or ""
     found = urls(text)
     if not found:
+        print(f"ℹ️ Message ignored (No URL found): {text[:50]}...")
         return
 
     source = f"@{chat.username}" if getattr(chat, "username", None) else str(chat.id)
@@ -550,16 +540,9 @@ async def process_message(event):
     if not remember_once(message_key):
         return
 
-    title = title_from(text)
-    first_url = found[0]
-
     from deal_sources import get_offer_price, resolve_url, canonical_url
-    price = await asyncio.to_thread(get_offer_price, text, first_url)
     
-    # Strict Validation: Agar price missing hai ya N/A hai ya MIN_PRICE se kam hai, toh yahin rok do
-    if not isinstance(price, (int, float)) or price <= 0 or price < MIN_PRICE:
-        return
-
+    first_url = found[0]
     deal_url = first_url
     try:
         resolved_url = await asyncio.to_thread(resolve_url, first_url)
@@ -568,12 +551,44 @@ async def process_message(event):
     except Exception:
         deal_url = first_url
 
+    title = get_smart_title(text, deal_url)
+    if not title or title == "Unknown Product":
+        return
+
+    price = await asyncio.to_thread(get_offer_price, text, deal_url)
+    if not isinstance(price, (int, float)) or price <= 0 or price < MIN_PRICE:
+        return
+
+    is_first_time = False
     db_min_str = "-"
     db_avg_str = "-"
-    if deal_url and price:
-        skip_deal, db_min_str, db_avg_str = await asyncio.to_thread(check_db_and_compare_price, deal_url, price)
-        if skip_deal:
-            return
+    db_min_val = price
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT price FROM historical_deals WHERE url = %s", (deal_url,))
+        rows = cursor.fetchall()
+        conn.close()
+
+        if not rows:
+            is_first_time = True
+            db_min_str = f"₹{price:,.0f}"
+            db_avg_str = f"₹{price:,.0f}"
+        else:
+            valid_prices = []
+            for row in rows:
+                val = row[0]
+                if val and val not in {"-", "N/A"}:
+                    cleaned = re.sub(r'[^\d.]', '', str(val))
+                    if cleaned:
+                        valid_prices.append(float(cleaned))
+            if valid_prices:
+                db_min_val = min(valid_prices)
+                db_min_str = f"₹{db_min_val:,.0f}"
+                db_avg_str = f"₹{sum(valid_prices) / len(valid_prices):,.0f}"
+    except Exception as e:
+        print(f"DB Check Error: {e}")
 
     global DEALS_SCANNED
     DEALS_SCANNED += 1
@@ -588,26 +603,20 @@ async def process_message(event):
     }
     RECENT_DEALS.appendleft(item)
 
-    # Sirf ek baar process hoga, multiple loops ki wajah se duplicate nahi jayega
+    if is_first_time:
+        print(f"ℹ️ First time seen. Saved to DB silently (No Post): {title} @ {price_display}")
+        return
+
+    if price >= db_min_val:
+        print(f"ℹ️ Price (₹{price}) is not lower than historical min ({db_min_str}). Skipping channel post.")
+        return
+
     async with sem:
         try:
-            res_url = await asyncio.to_thread(resolve_url, first_url)
-            final_url = (await asyncio.to_thread(canonical_url, res_url)) if res_url else first_url
-            result = await asyncio.wait_for(validate_deal(title, price, final_url, source, text), timeout=45)
-            await send_result(result, source, title, price, final_url, db_min_str, db_avg_str)
+            result = await asyncio.wait_for(validate_deal(title, price, deal_url, source, text), timeout=45)
+            await send_result(result, source, title, price, deal_url, db_min_str, db_avg_str)
         except Exception as e:
             print(f"Validation error: {e}")
-
-    for url in found[:3]:
-        async with sem:
-            try:
-                res_url = await asyncio.to_thread(resolve_url, url)
-                final_url = (await asyncio.to_thread(canonical_url, res_url)) if res_url else url
-                result = await asyncio.wait_for(validate_deal(title, price, final_url, source, text), timeout=45)
-                await send_result(result, source, title, price, final_url, db_min_str, db_avg_str)
-            except Exception as e:
-                print(f"Validation error: {e}")
-
 
 @client.on(events.NewMessage)
 async def on_new_message(event):
@@ -616,12 +625,10 @@ async def on_new_message(event):
     except Exception as e:
         print(f"Event handler error: {e}")
 
-
 async def heartbeat():
     while True:
         await asyncio.sleep(HEARTBEAT_SECONDS)
         await log(f"HEARTBEAT v{VERSION} | scanned={DEALS_SCANNED} | uptime={get_uptime_string()}", send_to_telegram=False)
-
 
 async def discover():
     global CHANNELS_COUNT
@@ -633,7 +640,6 @@ async def discover():
             count += 1
     CHANNELS_COUNT = count
     await log(f"Listening to {count} broadcast channels")
-
 
 async def main():
     web_thread = threading.Thread(target=run_web, daemon=True)
@@ -653,7 +659,6 @@ async def main():
         await client.run_until_disconnected()
     finally:
         hb.cancel()
-
 
 if __name__ == "__main__":
     asyncio.run(main())
