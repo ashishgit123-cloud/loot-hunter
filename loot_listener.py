@@ -14,8 +14,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from flask import Flask, jsonify, render_template_string, request, Response
-import threading
+from flask import Flask, jsonify, render_template, request, Responseimport threading
 from groq import Groq
 
 from deal_validator import validate_deal
