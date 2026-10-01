@@ -339,7 +339,8 @@ async def tracker_log(msg: str, error: bool = False):
 
 def channel_allowed(chat) -> bool:
     if not WATCH_CHANNELS:
-        return bool(getattr(chat, "broadcast", False))
+        # Broadcast channels aur Supergroups dono ko allow karega
+        return bool(getattr(chat, "broadcast", False) or getattr(chat, "megagroup", False) or getattr(chat, "gigagroup", False) or getattr(chat, "频道", False))
     username = (getattr(chat, "username", "") or "").lower().lstrip("@")
     return username in WATCH_CHANNELS
 
