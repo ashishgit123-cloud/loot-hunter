@@ -27,7 +27,7 @@ import psycopg2
 werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.ERROR)
 
-VERSION = "6.8"
+VERSION = "6.9"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -62,7 +62,6 @@ sem = asyncio.Semaphore(MAX_CONCURRENCY)
 
 seen = OrderedDict()
 DEAL_TTL_SECONDS = 7 * 24 * 60 * 60
-WATCHLIST_FILE = "watchlist.json"
 
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL)
@@ -71,6 +70,7 @@ def init_db():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
+        # Historical Deals Table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS historical_deals (
                 deal_id VARCHAR(64) PRIMARY KEY,
@@ -84,6 +84,15 @@ def init_db():
                 timestamp DOUBLE PRECISION
             )
         """)
+        # Watchlist Table (Permanent Storage in PostgreSQL)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS watchlist (
+                url TEXT PRIMARY KEY,
+                title TEXT,
+                price TEXT,
+                timestamp DOUBLE PRECISION
+            )
+        """)
         conn.commit()
         conn.close()
     except Exception as e:
@@ -91,24 +100,43 @@ def init_db():
 
 init_db()
 
-# --- WATCHLIST PERSISTENCE FUNCTIONS ---
-def load_watchlist_from_disk():
-    if os.path.exists(WATCHLIST_FILE):
-        try:
-            with open(WATCHLIST_FILE, 'r') as f:
-                return json.load(f)
-        except Exception:
-            return []
-    return []
-
-def save_watchlist_to_disk(items):
+# --- POSTGRESQL WATCHLIST FUNCTIONS ---
+def load_watchlist_from_db():
+    items = []
     try:
-        with open(WATCHLIST_FILE, 'w') as f:
-            json.dump(items, f, indent=4)
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT title, url, price, timestamp FROM watchlist ORDER BY timestamp DESC")
+        rows = cursor.fetchall()
+        conn.close()
+        for row in rows:
+            title, url, price, ts = row
+            items.append({
+                "title": title,
+                "url": url,
+                "price": price,
+                "time": datetime.fromtimestamp(ts).strftime("%H:%M:%S") if ts else datetime.now().strftime("%H:%M:%S")
+            })
     except Exception as e:
-        print(f"Error saving watchlist: {e}")
+        print(f"Error loading watchlist from DB: {e}")
+    return items
 
-WATCHED_ITEMS = load_watchlist_from_disk()
+def save_watchlist_item_to_db(title: str, url: str, price: str):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO watchlist (url, title, price, timestamp)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (url) DO UPDATE SET 
+            title = EXCLUDED.title, price = EXCLUDED.price, timestamp = EXCLUDED.timestamp
+        """, (url, title, price, time.time()))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Error saving watchlist item to DB: {e}")
+
+WATCHED_ITEMS = load_watchlist_from_db()
 
 START_TIME = time.time()
 CHANNELS_COUNT = 0
@@ -132,6 +160,9 @@ def get_uptime_string() -> str:
 
 @app.route("/stats")
 def stats():
+    # Refresh in-memory watched items from DB dynamically
+    global WATCHED_ITEMS
+    WATCHED_ITEMS = load_watchlist_from_db()
     return jsonify({
         "deals_scanned": DEALS_SCANNED,
         "recent_deals": list(RECENT_DEALS),
@@ -205,6 +236,7 @@ def add_watchlist():
     if not url:
         return jsonify({"status": "error", "message": "URL is required"}), 400
     
+    WATCHED_ITEMS = load_watchlist_from_db()
     if any(item.get('url') == url for item in WATCHED_ITEMS):
         return jsonify({"status": "success", "message": "Product already in watchlist!"})
 
@@ -227,15 +259,9 @@ def add_watchlist():
     except Exception:
         product_title = url.split('/')[-1].replace('-', ' ').title() or "Custom Item"
 
-    new_item = {
-        "title": product_title,
-        "url": url,
-        "price": "Checking...",
-        "time": datetime.now().strftime("%H:%M:%S") # Initialized with creation / last update time
-    }
-
-    WATCHED_ITEMS.append(new_item)
-    save_watchlist_to_disk(WATCHED_ITEMS)
+    # Save directly to PostgreSQL Database
+    save_watchlist_item_to_db(product_title, url, "Checking...")
+    WATCHED_ITEMS = load_watchlist_from_db()
 
     return jsonify({"status": "success", "message": f"Added: {product_title}"})
 
@@ -455,13 +481,16 @@ async def send_result(result, source, title, price, final_url, min_price_str, av
     await client.send_message(DESTINATION, "\n".join(lines))
 
 
-# --- PARALLEL BACKGROUND PRICE TRACKER WORKER (Updates Price & Last Update Time) ---
+# --- PARALLEL BACKGROUND PRICE TRACKER WORKER (Updates DB Watchlist) ---
 async def price_tracker_worker():
     while True:
         try:
+            global WATCHED_ITEMS
+            WATCHED_ITEMS = load_watchlist_from_db()
             if WATCHED_ITEMS:
                 for item in WATCHED_ITEMS:
                     url = item.get("url")
+                    title = item.get("title")
                     if url:
                         try:
                             from deal_sources import fetch_product_price
@@ -470,13 +499,12 @@ async def price_tracker_worker():
                                 price_val = await asyncio.to_thread(get_offer_price, "", url)
                             
                             price_display = f"₹{price_val:,.0f}" if isinstance(price_val, (int, float)) else (str(price_val) if price_val else "N/A")
-                            item["price"] = price_display
-                            # Update last checked timestamp here
-                            item["time"] = datetime.now().strftime("%H:%M:%S")
+                            
+                            # Save updated price and timestamp back to PostgreSQL
+                            save_watchlist_item_to_db(title, url, price_display)
                         except Exception:
                             pass
-                save_watchlist_to_disk(WATCHED_ITEMS)
-                await tracker_log("Checked all active watchlist items successfully.")
+                await tracker_log("Checked and updated all database watchlist items successfully.")
         except Exception as e:
             await tracker_log(f"Tracker error: {str(e)}", error=True)
         
