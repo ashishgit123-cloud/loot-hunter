@@ -29,7 +29,7 @@ from deal_sources import get_offer_price, resolve_url, canonical_url
 werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.ERROR)
 
-VERSION = "6.1"
+VERSION = "6.2"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -63,34 +63,38 @@ seen = OrderedDict()
 
 # --- SQLITE DATABASE INITIALIZATION ---
 DB_FILE = "loot_history.db"
-DEAL_TTL_SECONDS = 2 * 24 * 60 * 60  # 48 Hours
+DEAL_TTL_SECONDS = 7 * 24 * 60 * 60  # Increased to 7 Days for safety
 
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS historical_deals (
-            deal_id TEXT PRIMARY KEY,
-            title TEXT,
-            price TEXT,
-            min_price TEXT,
-            avg_price TEXT,
-            source TEXT,
-            url TEXT,
-            verdict TEXT,
-            timestamp REAL
-        )
-    """)
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS historical_deals (
+                deal_id TEXT PRIMARY KEY,
+                title TEXT,
+                price TEXT,
+                min_price TEXT,
+                avg_price TEXT,
+                source TEXT,
+                url TEXT,
+                verdict TEXT,
+                timestamp REAL
+            )
+        """)
+        conn.commit()
+        conn.close()
+        print("SQLite Database initialized successfully.")
+    except Exception as e:
+        print(f"Database initialization error: {e}")
 
 init_db()
 
 START_TIME = time.time()
 CHANNELS_COUNT = 0
 DEALS_SCANNED = 0
-RECENT_DEALS = deque(maxlen=15)
-POSTED_DEALS = deque(maxlen=15)
+RECENT_DEALS = deque(maxlen=20)
+POSTED_DEALS = deque(maxlen=20)
 RECENT_LOGS = deque(maxlen=50)
 
 app = Flask(__name__)
@@ -182,7 +186,6 @@ def search_db():
                 )
                 ai_answer = completion.choices[0].message.content.strip()
             except Exception as llm_err:
-                print(f"Groq LLM Error: {llm_err}")
                 ai_answer = f"Found {len(matched_deals)} relevant deals matching your search."
         else:
             ai_answer = f"Here are the top deals found for '{query}':" if matched_deals else "No matching deals found in the database."
@@ -217,7 +220,6 @@ def export_deals_csv():
             for row in rows:
                 deal_id, title, price, min_price, avg_price, source, url, verdict, ts = row
                 time_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
-                # Escape quotes in title/source/url
                 safe_title = str(title).replace('"', '""')
                 yield f'"{deal_id}","{safe_title}","{price}","{min_price}","{avg_price}","{source}","{url}","{verdict}","{time_str}"\n'
 
@@ -281,8 +283,9 @@ def save_deal_to_sqlite(deal_id: str, title: str, price: any, source: str, url: 
         """, (deal_id, title, str(price), str(min_price), str(avg_price), source, url, verdict, now))
         conn.commit()
         conn.close()
+        print(f"SUCCESS: Saved deal to SQLite -> {title[:30]} ({price})")
     except Exception as e:
-        print(f"SQLite save error: {e}")
+        print(f"CRITICAL SQLite save error: {e}")
 
 
 def load_deals_from_sqlite_on_startup():
@@ -294,7 +297,7 @@ def load_deals_from_sqlite_on_startup():
             SELECT deal_id, title, price, min_price, avg_price, source, url, verdict, timestamp 
             FROM historical_deals 
             ORDER BY timestamp DESC 
-            LIMIT 15
+            LIMIT 20
         """)
         rows = cursor.fetchall()
         conn.close()
@@ -314,7 +317,9 @@ def load_deals_from_sqlite_on_startup():
                 RECENT_DEALS.append(item)
                 if verdict_val in {Verdict.DEAL.value, Verdict.POSSIBLE_DEAL.value, "DEAL", "POSSIBLE_DEAL"}:
                     POSTED_DEALS.append(item)
-            print(f"Restored {len(rows)} deals from SQLite cache.")
+            print(f"Restored {len(rows)} deals from SQLite cache into memory.")
+        else:
+            print("No previous deals found in SQLite cache.")
     except Exception as e:
         print(f"Error loading SQLite cache: {e}")
 
@@ -422,7 +427,7 @@ async def send_result(result, source, title, price, final_url):
             deal["avg_price"] = avg_price_str
 
     deal_id = hashlib.sha256(f"{final_url}:{title}".encode()).hexdigest()[:16]
-    save_deal_to_sqlite(deal_id, title, price_display, source, final_url, result.verdict.value, min_price_str, avg_price_str)
+    await asyncio.to_thread(save_deal_to_sqlite, deal_id, title, price_display, source, final_url, result.verdict.value, min_price_str, avg_price_str)
 
     emoji = "🔥" if result.verdict == Verdict.DEAL else "🟡"
     e = result.evidence
@@ -453,12 +458,16 @@ async def send_result(result, source, title, price, final_url):
 
 async def process_message(event):
     chat = await event.get_chat()
+    chat_username = getattr(chat, "username", "") or str(chat.id)
+
     if not channel_allowed(chat):
+        await log(f"⏭️ Skipped message from unauthorized/unwatched channel: @{chat_username}", error=True)
         return
 
     text = event.raw_text or ""
     found = urls(text)
     if not found:
+        await log(f"⏭️ [{chat_username}] Skipped message: No URLs found in text snippet.", error=True)
         return
 
     source = f"@{chat.username}" if getattr(chat, "username", None) else str(chat.id)
@@ -513,7 +522,8 @@ async def process_message(event):
         RECENT_DEALS.appendleft(new_deal_item)
 
     deal_id = hashlib.sha256(f"{deal_url}:{title}".encode()).hexdigest()[:16]
-    save_deal_to_sqlite(deal_id, title, price_display, source, deal_url, "SCANNED", "-", "-")
+    # SAVE SCANNED DEAL TO SQLITE IMMEDIATELY
+    await asyncio.to_thread(save_deal_to_sqlite, deal_id, title, price_display, source, deal_url, "SCANNED", "-", "-")
 
     for url in found[:3]:
         async with sem:
