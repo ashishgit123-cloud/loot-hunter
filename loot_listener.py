@@ -27,7 +27,7 @@ import psycopg2
 werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.ERROR)
 
-VERSION = "6.9"
+VERSION = "6.9.1"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -122,19 +122,16 @@ def load_watchlist_from_db():
     return items
 
 def save_watchlist_item_to_db(title: str, url: str, price: str):
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO watchlist (url, title, price, timestamp)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (url) DO UPDATE SET 
-            title = EXCLUDED.title, price = EXCLUDED.price, timestamp = EXCLUDED.timestamp
-        """, (url, title, price, time.time()))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"Error saving watchlist item to DB: {e}")
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO watchlist (url, title, price, timestamp)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (url) DO UPDATE SET 
+        title = EXCLUDED.title, price = EXCLUDED.price, timestamp = EXCLUDED.timestamp
+    """, (url, title, price, time.time()))
+    conn.commit()
+    conn.close()
 
 WATCHED_ITEMS = load_watchlist_from_db()
 
@@ -160,7 +157,6 @@ def get_uptime_string() -> str:
 
 @app.route("/stats")
 def stats():
-    # Refresh in-memory watched items from DB dynamically
     global WATCHED_ITEMS
     WATCHED_ITEMS = load_watchlist_from_db()
     return jsonify({
@@ -236,10 +232,6 @@ def add_watchlist():
     if not url:
         return jsonify({"status": "error", "message": "URL is required"}), 400
     
-    WATCHED_ITEMS = load_watchlist_from_db()
-    if any(item.get('url') == url for item in WATCHED_ITEMS):
-        return jsonify({"status": "success", "message": "Product already in watchlist!"})
-
     # Enhanced Product Title Scraping
     product_title = "Watched Product"
     try:
@@ -259,10 +251,14 @@ def add_watchlist():
     except Exception:
         product_title = url.split('/')[-1].replace('-', ' ').title() or "Custom Item"
 
-    # Save directly to PostgreSQL Database
-    save_watchlist_item_to_db(product_title, url, "Checking...")
-    WATCHED_ITEMS = load_watchlist_from_db()
+    # Save directly to PostgreSQL Database with explicit error handling
+    try:
+        save_watchlist_item_to_db(product_title, url, "Checking...")
+    except Exception as e:
+        print(f"CRITICAL DB Error in add_watchlist: {e}")
+        return jsonify({"status": "error", "message": f"Database error: {str(e)}"}), 500
 
+    WATCHED_ITEMS = load_watchlist_from_db()
     return jsonify({"status": "success", "message": f"Added: {product_title}"})
 
 
@@ -306,9 +302,6 @@ def purge_old_deals():
 
 
 def check_db_and_compare_price(deal_url: str, current_price: float):
-    """
-    Returns (Should_Skip, min_price_str, avg_price_str) based on DB history.
-    """
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -500,7 +493,6 @@ async def price_tracker_worker():
                             
                             price_display = f"₹{price_val:,.0f}" if isinstance(price_val, (int, float)) else (str(price_val) if price_val else "N/A")
                             
-                            # Save updated price and timestamp back to PostgreSQL
                             save_watchlist_item_to_db(title, url, price_display)
                         except Exception:
                             pass
@@ -547,7 +539,7 @@ async def process_message(event):
     if deal_url and price:
         skip_deal, db_min_str, db_avg_str = await asyncio.to_thread(check_db_and_compare_price, deal_url, price)
         if skip_deal:
-            return  # Ignored because price is not lower than previous DB minimum
+            return
 
     global DEALS_SCANNED
     DEALS_SCANNED += 1
