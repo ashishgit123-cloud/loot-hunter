@@ -539,13 +539,6 @@ async def on_new_message(event):
     except Exception:
         pass
 
-@client.on(events.ChannelPost)
-async def on_channel_post(event):
-    try:
-        await process_message(event)
-    except Exception:
-        pass
-
 async def heartbeat():
     while True:
         await asyncio.sleep(HEARTBEAT_SECONDS)
