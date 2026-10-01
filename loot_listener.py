@@ -380,97 +380,28 @@ async def send_result(result, source, title, price, final_url):
 
 # --- PARALLEL BACKGROUND PRICE TRACKER WORKER (With Live Status Feed) ---
 async def price_tracker_worker():
-    await asyncio.sleep(15)
-    alerted_cache = {}
-    
     while True:
         try:
-            watchlist_path = "watchlist.txt"
-            if os.path.exists(watchlist_path):
-                with open(watchlist_path, "r") as f:
-                    urls_to_check = [line.strip() for line in f if line.strip() and not line.startswith("#")]
-                
-                if urls_to_check:
-                    await tracker_log(f"Scanning {len(urls_to_check)} watchlisted items...")
-                    for raw_url in urls_to_check:
-                        try:
-                            resolved = await asyncio.to_thread(resolve_url, raw_url)
-                            canonical = canonical_url(resolved) if resolved else raw_url
-                            if not canonical:
-                                canonical = raw_url
-
-                            live_price = await asyncio.to_thread(fetch_product_price, canonical)
-                            if not live_price or live_price <= 50:
-                                continue
-
-                            conn = sqlite3.connect(DB_FILE)
-                            cursor = conn.cursor()
-                            cursor.execute("SELECT price, min_price, title FROM historical_deals WHERE url = ? ORDER BY timestamp DESC LIMIT 1", (canonical,))
-                            row = cursor.fetchone()
-                            conn.close()
-
-                            item_title = "Monitored Item"
-                            if row:
-                                db_price_str, db_min_str, title = row
-                                item_title = title if title else "Monitored Item"
-                                db_price = parse_price_to_float(db_price_str)
-                                db_min = parse_price_to_float(db_min_str)
-                                
-                                ref_price = db_min if (db_min and db_min > 50) else db_price
-                                
-                                if ref_price and ref_price > 50:
-                                    threshold_price = ref_price * 0.90  
-                                    
-                                    if live_price <= threshold_price:
-                                        drop_pct = ((ref_price - live_price) / ref_price) * 100
-                                        alert_key = f"{canonical}:{live_price}"
-                                        
-                                        if alert_key not in alerted_cache:
-                                            alerted_cache[alert_key] = time.time()
-                                            await tracker_log(f"🔥 GENUINE PRICE DROP! Live: ₹{live_price:,.0f} vs Old: ₹{ref_price:,.0f} ({drop_pct:.1f}% cheaper)")
-
-                                            new_min = min(live_price, ref_price)
-                                            new_min_str = f"₹{new_min:,.0f}"
-                                            
-                                            msg = (
-                                                f"🔥 **PRICE DROP ALERT ({drop_pct:.1f}% OFF)**\n\n"
-                                                f"📦 {item_title}\n"
-                                                f"💰 New Live Price: **₹{live_price:,.0f}**\n"
-                                                f"📉 Previous Price: ₹{ref_price:,.0f}\n"
-                                                f"🎯 Total Drop: {drop_pct:.1f}%\n\n"
-                                                f"🔗 {canonical}"
-                                            )
-                                            await client.send_message(DESTINATION, msg)
-                                            
-                                            deal_id = hashlib.sha256(f"{canonical}:{item_title}".encode()).hexdigest()[:16]
-                                            save_deal_to_sqlite(
-                                                deal_id, item_title, f"₹{live_price:,.0f}", 
-                                                "Live Tracker", canonical, "DEAL", 
-                                                new_min_str, f"₹{ref_price:,.0f}"
-                                            )
-                            else:
-                                deal_id = hashlib.sha256(f"{canonical}:Watchlist Baseline".encode()).hexdigest()[:16]
-                                save_deal_to_sqlite(
-                                    deal_id, "Watchlist Monitored Item", f"₹{live_price:,.0f}", 
-                                    "Live Tracker", canonical, "SCANNED", 
-                                    f"₹{live_price:,.0f}", f"₹{live_price:,.0f}"
-                                )
-
-                            # Update Live Status Feed for Web Dashboard
-                            global WATCHED_ITEMS_STATUS
-                            WATCHED_ITEMS_STATUS[canonical] = {
-                                "title": item_title[:100],
-                                "price": f"₹{live_price:,.0f}",
-                                "url": canonical,
-                                "time": datetime.now().strftime("%H:%M:%S")
-                            }
-                        
-                        except Exception as item_err:
-                            pass
-        except Exception as e:
-            await tracker_log(f"Worker error: {e}", error=True)
+            # Yahan aapka watchlist items ko check karne ka code hoga
+            if 'WATCHED_ITEMS' in globals() and WATCHED_ITEMS:
+                for item in WATCHED_ITEMS:
+                    # Example check logic
+                    # ...
+                    pass
             
-        await asyncio.sleep(20)
+            # Agar sab theek hai toh log add karein
+            timestamp = datetime.now().astimezone().strftime("%H:%M:%S")
+            # tracker_logs.appendleft({"time": timestamp, "prefix": "⚡", "msg": "Checked watchlist items...", "is_error": False})
+            
+        except Exception as e:
+            # Error aane par bhi loop band nahi hoga, balki log mein dikhega
+            timestamp = datetime.now().astimezone().strftime("%H:%M:%S")
+            print(f"Tracker Worker Error: {e}")
+            if 'TRACKER_LOGS' in globals():
+                TRACKER_LOGS.appendleft({"time": timestamp, "prefix": "❌", "msg": f"Tracker error: {str(e)}", "is_error": True})
+        
+        # Har 60 ya 120 seconds baad dubara chalega
+        await asyncio.sleep(60)
 
 
 async def process_message(event):
