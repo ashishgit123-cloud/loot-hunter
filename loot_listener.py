@@ -339,8 +339,7 @@ async def tracker_log(msg: str, error: bool = False):
 
 def channel_allowed(chat) -> bool:
     if not WATCH_CHANNELS:
-        # Broadcast channels aur Supergroups dono ko allow karega
-        return bool(getattr(chat, "broadcast", False) or getattr(chat, "megagroup", False) or getattr(chat, "gigagroup", False) or getattr(chat, "频道", False))
+        return True  # Sabhi joined channels aur groups ko allow kar dega
     username = (getattr(chat, "username", "") or "").lower().lstrip("@")
     return username in WATCH_CHANNELS
 
@@ -546,7 +545,7 @@ async def on_channel_post(event):
         await process_message(event)
     except Exception:
         pass
-        
+
 async def heartbeat():
     while True:
         await asyncio.sleep(HEARTBEAT_SECONDS)
