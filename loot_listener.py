@@ -5,19 +5,16 @@ import hashlib
 import os
 import re
 import time
-import traceback
 import logging
 import sqlite3
-import csv
 from collections import OrderedDict, deque
 from typing import Optional
-from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime
 
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from flask import Flask, jsonify, render_template, request, Response
+from flask import Flask, jsonify, render_template_string, request, Response
 import threading
 from groq import Groq
 
@@ -29,7 +26,7 @@ from deal_sources import get_offer_price, resolve_url, canonical_url, fetch_prod
 werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.ERROR)
 
-VERSION = "6.5"
+VERSION = "6.6"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -62,6 +59,9 @@ seen = OrderedDict()
 
 DB_FILE = "loot_history.db"
 DEAL_TTL_SECONDS = 7 * 24 * 60 * 60
+
+# Live Tracker Status storage for Dashboard UI
+WATCHED_ITEMS_STATUS = {}
 
 def init_db():
     try:
@@ -115,6 +115,7 @@ def stats():
         "posted_deals": list(POSTED_DEALS),
         "recent_logs": list(RECENT_LOGS),
         "tracker_logs": list(TRACKER_LOGS),
+        "watched_items": list(WATCHED_ITEMS_STATUS.values()),
         "channels_count": CHANNELS_COUNT,
         "uptime": get_uptime_string(),
         "dedup_size": len(seen),
@@ -377,7 +378,7 @@ async def send_result(result, source, title, price, final_url):
     await client.send_message(DESTINATION, "\n".join(lines))
 
 
-# --- PARALLEL BACKGROUND PRICE TRACKER WORKER (Strict 10% Drop Rule) ---
+# --- PARALLEL BACKGROUND PRICE TRACKER WORKER (With Live Status Feed) ---
 async def price_tracker_worker():
     await asyncio.sleep(15)
     alerted_cache = {}
@@ -408,15 +409,16 @@ async def price_tracker_worker():
                             row = cursor.fetchone()
                             conn.close()
 
+                            item_title = "Monitored Item"
                             if row:
                                 db_price_str, db_min_str, title = row
+                                item_title = title if title else "Monitored Item"
                                 db_price = parse_price_to_float(db_price_str)
                                 db_min = parse_price_to_float(db_min_str)
                                 
                                 ref_price = db_min if (db_min and db_min > 50) else db_price
                                 
                                 if ref_price and ref_price > 50:
-                                    # Strict condition: Live price must be AT LEAST 10% lower than reference price
                                     threshold_price = ref_price * 0.90  
                                     
                                     if live_price <= threshold_price:
@@ -432,7 +434,7 @@ async def price_tracker_worker():
                                             
                                             msg = (
                                                 f"🔥 **PRICE DROP ALERT ({drop_pct:.1f}% OFF)**\n\n"
-                                                f"📦 {title}\n"
+                                                f"📦 {item_title}\n"
                                                 f"💰 New Live Price: **₹{live_price:,.0f}**\n"
                                                 f"📉 Previous Price: ₹{ref_price:,.0f}\n"
                                                 f"🎯 Total Drop: {drop_pct:.1f}%\n\n"
@@ -440,9 +442,9 @@ async def price_tracker_worker():
                                             )
                                             await client.send_message(DESTINATION, msg)
                                             
-                                            deal_id = hashlib.sha256(f"{canonical}:{title}".encode()).hexdigest()[:16]
+                                            deal_id = hashlib.sha256(f"{canonical}:{item_title}".encode()).hexdigest()[:16]
                                             save_deal_to_sqlite(
-                                                deal_id, title, f"₹{live_price:,.0f}", 
+                                                deal_id, item_title, f"₹{live_price:,.0f}", 
                                                 "Live Tracker", canonical, "DEAL", 
                                                 new_min_str, f"₹{ref_price:,.0f}"
                                             )
@@ -453,6 +455,15 @@ async def price_tracker_worker():
                                     "Live Tracker", canonical, "SCANNED", 
                                     f"₹{live_price:,.0f}", f"₹{live_price:,.0f}"
                                 )
+
+                            # Update Live Status Feed for Web Dashboard
+                            global WATCHED_ITEMS_STATUS
+                            WATCHED_ITEMS_STATUS[canonical] = {
+                                "title": item_title[:100],
+                                "price": f"₹{live_price:,.0f}",
+                                "url": canonical,
+                                "time": datetime.now().strftime("%H:%M:%S")
+                            }
                         
                         except Exception as item_err:
                             pass
