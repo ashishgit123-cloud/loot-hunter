@@ -27,7 +27,7 @@ import psycopg2
 werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.ERROR)
 
-VERSION = "6.7"
+VERSION = "6.8"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -208,24 +208,30 @@ def add_watchlist():
     if any(item.get('url') == url for item in WATCHED_ITEMS):
         return jsonify({"status": "success", "message": "Product already in watchlist!"})
 
+    # Enhanced Product Title Scraping
     product_title = "Watched Product"
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        resp = requests.get(url, headers=headers, timeout=5)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        resp = requests.get(url, headers=headers, timeout=6)
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, 'html.parser')
-            if soup.find('title'):
-                product_title = soup.find('title').get_text().strip()[:50] + "..."
-            elif soup.find('meta', property='og:title'):
-                product_title = soup.find('meta', property='og:title')['content'].strip()[:50] + "..."
+            if soup.find('meta', property='og:title'):
+                product_title = soup.find('meta', property='og:title')['content'].strip()
+            elif soup.find('title'):
+                product_title = soup.find('title').get_text().strip()
+            
+            if len(product_title) > 60:
+                product_title = product_title[:57] + "..."
     except Exception:
-        product_title = url.split('/')[-1] or "Custom Item"
+        product_title = url.split('/')[-1].replace('-', ' ').title() or "Custom Item"
 
     new_item = {
         "title": product_title,
         "url": url,
         "price": "Checking...",
-        "time": datetime.now().strftime("%H:%M:%S")
+        "time": datetime.now().strftime("%H:%M:%S") # Initialized with creation / last update time
     }
 
     WATCHED_ITEMS.append(new_item)
@@ -301,7 +307,6 @@ def check_db_and_compare_price(deal_url: str, current_price: float):
         db_min = min(valid_prices)
         db_avg = sum(valid_prices) / len(valid_prices)
 
-        # Agar nayi price purani minimum price se zyada ya barabar hai, toh avoid karo
         if current_price >= db_min:
             return True, f"₹{db_min:,.0f}", f"₹{db_avg:,.0f}"
         
@@ -450,7 +455,7 @@ async def send_result(result, source, title, price, final_url, min_price_str, av
     await client.send_message(DESTINATION, "\n".join(lines))
 
 
-# --- PARALLEL BACKGROUND PRICE TRACKER WORKER ---
+# --- PARALLEL BACKGROUND PRICE TRACKER WORKER (Updates Price & Last Update Time) ---
 async def price_tracker_worker():
     while True:
         try:
@@ -466,6 +471,7 @@ async def price_tracker_worker():
                             
                             price_display = f"₹{price_val:,.0f}" if isinstance(price_val, (int, float)) else (str(price_val) if price_val else "N/A")
                             item["price"] = price_display
+                            # Update last checked timestamp here
                             item["time"] = datetime.now().strftime("%H:%M:%S")
                         except Exception:
                             pass
@@ -508,13 +514,12 @@ async def process_message(event):
         except Exception:
             deal_url = first_url
 
-    # Smart DB Price Comparison Logic
     db_min_str = "-"
     db_avg_str = "-"
     if deal_url and price:
         skip_deal, db_min_str, db_avg_str = await asyncio.to_thread(check_db_and_compare_price, deal_url, price)
         if skip_deal:
-            return  # Purani history se mehangi deal hai, isliye ignore kar diya!
+            return  # Ignored because price is not lower than previous DB minimum
 
     global DEALS_SCANNED
     DEALS_SCANNED += 1
