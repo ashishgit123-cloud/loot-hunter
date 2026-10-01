@@ -7,6 +7,9 @@ import re
 import time
 import logging
 import sqlite3
+import json
+import io
+import csv
 from collections import OrderedDict, deque
 from typing import Optional
 from datetime import datetime
@@ -17,6 +20,8 @@ from telethon.sessions import StringSession
 from flask import Flask, jsonify, render_template, request, Response
 import threading
 from groq import Groq
+import requests
+from bs4 import BeautifulSoup
 
 from deal_validator import validate_deal
 from deal_models import Verdict
@@ -59,9 +64,7 @@ seen = OrderedDict()
 
 DB_FILE = "loot_history.db"
 DEAL_TTL_SECONDS = 7 * 24 * 60 * 60
-
-# Live Tracker Status storage for Dashboard UI
-WATCHED_ITEMS_STATUS = {}
+WATCHLIST_FILE = "watchlist.json"
 
 def init_db():
     try:
@@ -86,6 +89,25 @@ def init_db():
         print(f"Database initialization error: {e}")
 
 init_db()
+
+# --- WATCHLIST PERSISTENCE FUNCTIONS ---
+def load_watchlist_from_disk():
+    if os.path.exists(WATCHLIST_FILE):
+        try:
+            with open(WATCHLIST_FILE, 'r') as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+def save_watchlist_to_disk(items):
+    try:
+        with open(WATCHLIST_FILE, 'w') as f:
+            json.dump(items, f, indent=4)
+    except Exception as e:
+        print(f"Error saving watchlist: {e}")
+
+WATCHED_ITEMS = load_watchlist_from_disk()
 
 START_TIME = time.time()
 CHANNELS_COUNT = 0
@@ -115,7 +137,7 @@ def stats():
         "posted_deals": list(POSTED_DEALS),
         "recent_logs": list(RECENT_LOGS),
         "tracker_logs": list(TRACKER_LOGS),
-        "watched_items": list(WATCHED_ITEMS_STATUS.values()),
+        "watched_items": WATCHED_ITEMS,
         "channels_count": CHANNELS_COUNT,
         "uptime": get_uptime_string(),
         "dedup_size": len(seen),
@@ -176,16 +198,39 @@ def search_db():
 
 @app.route("/add_watchlist", methods=["POST"])
 def add_watchlist():
+    global WATCHED_ITEMS
     data = request.json or {}
     url = data.get("url", "").strip()
     if not url:
         return jsonify({"status": "error", "message": "URL is required"}), 400
+    
+    if any(item.get('url') == url for item in WATCHED_ITEMS):
+        return jsonify({"status": "success", "message": "Product already in watchlist!"})
+
+    product_title = "Watched Product"
     try:
-        with open("watchlist.txt", "a") as f:
-            f.write(url + "\n")
-        return jsonify({"status": "success", "message": "URL added to live watchlist!"})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        resp = requests.get(url, headers=headers, timeout=5)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            if soup.find('title'):
+                product_title = soup.find('title').get_text().strip()[:50] + "..."
+            elif soup.find('meta', property='og:title'):
+                product_title = soup.find('meta', property='og:title')['content'].strip()[:50] + "..."
+    except Exception:
+        product_title = url.split('/')[-1] or "Custom Item"
+
+    new_item = {
+        "title": product_title,
+        "url": url,
+        "price": "Checking...",
+        "time": datetime.now().strftime("%H:%M:%S")
+    }
+
+    WATCHED_ITEMS.append(new_item)
+    save_watchlist_to_disk(WATCHED_ITEMS)
+
+    return jsonify({"status": "success", "message": f"Added: {product_title}"})
 
 
 @app.route("/export")
@@ -225,6 +270,18 @@ def purge_old_deals():
         conn.close()
     except Exception:
         pass
+
+
+def is_deal_already_processed(deal_url: str) -> bool:
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM historical_deals WHERE url = ? LIMIT 1", (deal_url,))
+        row = cursor.fetchone()
+        conn.close()
+        return bool(row)
+    except Exception:
+        return False
 
 
 def parse_price_to_float(val) -> Optional[float]:
@@ -314,14 +371,14 @@ def title_from(text: str) -> str:
     return "Unknown Product"
 
 
-async def log(msg: str, error: bool = False):
+async def log(msg: str, error: bool = False, send_to_telegram: bool = True):
     prefix = "❌" if error else "ℹ️"
     timestamp = datetime.now().astimezone().strftime("%H:%M:%S")
     line = f"[{timestamp}] {prefix} {msg}"
     print(line)
     global RECENT_LOGS
     RECENT_LOGS.appendleft({"time": timestamp, "prefix": prefix, "msg": msg, "is_error": error})
-    if LOG_CHANNEL:
+    if LOG_CHANNEL and send_to_telegram:
         try:
             await client.send_message(LOG_CHANNEL, line)
         except Exception:
@@ -339,7 +396,7 @@ async def tracker_log(msg: str, error: bool = False):
 
 def channel_allowed(chat) -> bool:
     if not WATCH_CHANNELS:
-        return True  # Sabhi joined channels aur groups ko allow kar dega
+        return True
     username = (getattr(chat, "username", "") or "").lower().lstrip("@")
     return username in WATCH_CHANNELS
 
@@ -378,29 +435,29 @@ async def send_result(result, source, title, price, final_url):
     await client.send_message(DESTINATION, "\n".join(lines))
 
 
-# --- PARALLEL BACKGROUND PRICE TRACKER WORKER (With Live Status Feed) ---
+# --- PARALLEL BACKGROUND PRICE TRACKER WORKER ---
 async def price_tracker_worker():
     while True:
         try:
-            # Yahan aapka watchlist items ko check karne ka code hoga
-            if 'WATCHED_ITEMS' in globals() and WATCHED_ITEMS:
+            if WATCHED_ITEMS:
                 for item in WATCHED_ITEMS:
-                    # Example check logic
-                    # ...
-                    pass
-            
-            # Agar sab theek hai toh log add karein
-            timestamp = datetime.now().astimezone().strftime("%H:%M:%S")
-            # tracker_logs.appendleft({"time": timestamp, "prefix": "⚡", "msg": "Checked watchlist items...", "is_error": False})
-            
+                    url = item.get("url")
+                    if url:
+                        try:
+                            price_val = await asyncio.to_thread(fetch_product_price, url)
+                            if not price_val:
+                                price_val = await asyncio.to_thread(get_offer_price, "", url)
+                            
+                            price_display = f"₹{price_val:,.0f}" if isinstance(price_val, (int, float)) else (str(price_val) if price_val else "N/A")
+                            item["price"] = price_display
+                            item["time"] = datetime.now().strftime("%H:%M:%S")
+                        except Exception:
+                            pass
+                save_watchlist_to_disk(WATCHED_ITEMS)
+                await tracker_log("Checked all active watchlist items successfully.")
         except Exception as e:
-            # Error aane par bhi loop band nahi hoga, balki log mein dikhega
-            timestamp = datetime.now().astimezone().strftime("%H:%M:%S")
-            print(f"Tracker Worker Error: {e}")
-            if 'TRACKER_LOGS' in globals():
-                TRACKER_LOGS.appendleft({"time": timestamp, "prefix": "❌", "msg": f"Tracker error: {str(e)}", "is_error": True})
+            await tracker_log(f"Tracker error: {str(e)}", error=True)
         
-        # Har 60 ya 120 seconds baad dubara chalega
         await asyncio.sleep(60)
 
 
@@ -463,17 +520,11 @@ async def on_new_message(event):
     except Exception:
         pass
 
-@client.on(events.NewMessage)
-async def on_new_message(event):
-    try:
-        await process_message(event)
-    except Exception:
-        pass
 
 async def heartbeat():
     while True:
         await asyncio.sleep(HEARTBEAT_SECONDS)
-        await log(f"HEARTBEAT v{VERSION} | scanned={DEALS_SCANNED} | uptime={get_uptime_string()}")
+        await log(f"HEARTBEAT v{VERSION} | scanned={DEALS_SCANNED} | uptime={get_uptime_string()}", send_to_telegram=False)
 
 
 async def discover():
