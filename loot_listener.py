@@ -472,11 +472,15 @@ async def validate_deal(title, price, final_url, source, text) -> DealResult:
 
 
 async def send_result(result, source, title, price, final_url, min_price_str, avg_price_str):
+    # Strict Check: Agar price valid number nahi hai ya N/A hai, toh kabhi post mat karo
+    if not isinstance(price, (int, float)) or price <= 0:
+        return
+
     if result.verdict not in {Verdict.DEAL, Verdict.POSSIBLE_DEAL}:
         return
 
     global POSTED_DEALS
-    price_display = f"₹{price:,.0f}" if isinstance(price, (int, float)) else (price if price else "N/A")
+    price_display = f"₹{price:,.0f}"
     
     posted_item = {
         "title": title[:100], "price": price_display, "min_price": min_price_str,
@@ -533,19 +537,12 @@ async def price_tracker_worker():
 
 async def process_message(event):
     chat = await event.get_chat()
-    
-    # 🔍 Diagnostic Logging for incoming message
-    chat_identifier = getattr(chat, "username", None) or str(chat.id)
-    print(f"📥 Message received from chat: {chat_identifier}")
-
     if not channel_allowed(chat):
-        print(f"⚠️ Channel {chat_identifier} is not in WATCH_CHANNELS filter list!")
         return
 
     text = event.raw_text or ""
     found = urls(text)
     if not found:
-        print(f"ℹ️ Message ignored (No URL found): {text[:50]}...")
         return
 
     source = f"@{chat.username}" if getattr(chat, "username", None) else str(chat.id)
@@ -554,44 +551,52 @@ async def process_message(event):
         return
 
     title = title_from(text)
-    first_url = found[0] if found else None
+    first_url = found[0]
 
     from deal_sources import get_offer_price, resolve_url, canonical_url
     price = await asyncio.to_thread(get_offer_price, text, first_url)
-    if price and price < MIN_PRICE:
-        print(f"ℹ️ Price ₹{price} is below MIN_PRICE threshold ({MIN_PRICE})")
+    
+    # Strict Validation: Agar price missing hai ya N/A hai ya MIN_PRICE se kam hai, toh yahin rok do
+    if not isinstance(price, (int, float)) or price <= 0 or price < MIN_PRICE:
         return
 
     deal_url = first_url
-    if first_url:
-        try:
-            resolved_url = await asyncio.to_thread(resolve_url, first_url)
-            if resolved_url:
-                deal_url = await asyncio.to_thread(canonical_url, resolved_url)
-        except Exception:
-            deal_url = first_url
+    try:
+        resolved_url = await asyncio.to_thread(resolve_url, first_url)
+        if resolved_url:
+            deal_url = await asyncio.to_thread(canonical_url, resolved_url)
+    except Exception:
+        deal_url = first_url
 
     db_min_str = "-"
     db_avg_str = "-"
     if deal_url and price:
         skip_deal, db_min_str, db_avg_str = await asyncio.to_thread(check_db_and_compare_price, deal_url, price)
         if skip_deal:
-            print(f"ℹ️ Skipping duplicate/higher-priced deal for URL: {deal_url}")
             return
 
     global DEALS_SCANNED
     DEALS_SCANNED += 1
-    price_display = f"₹{price:,.0f}" if isinstance(price, (int, float)) else (price if price else "N/A")
+    price_display = f"₹{price:,.0f}"
     
     deal_id = hashlib.sha256(f"{deal_url}:{title}".encode()).hexdigest()[:16]
     save_deal_to_db(deal_id, title, price_display, source, deal_url, "SCANNED", db_min_str, db_avg_str)
 
-    # Push to Recent Deals Stream for UI
     item = {
         "title": title[:100], "price": price_display, "min_price": db_min_str,
         "avg_price": db_avg_str, "source": source, "url": deal_url, "time": datetime.now().strftime("%H:%M:%S")
     }
     RECENT_DEALS.appendleft(item)
+
+    # Sirf ek baar process hoga, multiple loops ki wajah se duplicate nahi jayega
+    async with sem:
+        try:
+            res_url = await asyncio.to_thread(resolve_url, first_url)
+            final_url = (await asyncio.to_thread(canonical_url, res_url)) if res_url else first_url
+            result = await asyncio.wait_for(validate_deal(title, price, final_url, source, text), timeout=45)
+            await send_result(result, source, title, price, final_url, db_min_str, db_avg_str)
+        except Exception as e:
+            print(f"Validation error: {e}")
 
     for url in found[:3]:
         async with sem:
