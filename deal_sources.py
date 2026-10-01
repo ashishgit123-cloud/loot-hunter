@@ -90,7 +90,8 @@ def clean_price(value) -> Optional[float]:
 
     try:
         price = float(m.group(0).replace(",", ""))
-        return price if price > 0 else None
+        # Filter out numbers that look like percentages or unrealistically low prices (< 50)
+        return price if price > 50 else None
     except (ValueError, TypeError):
         return None
 
@@ -98,14 +99,17 @@ def clean_price(value) -> Optional[float]:
 def extract_price_from_text(text: str) -> Optional[float]:
     """
     Extracts deal price from raw Telegram message text or titles.
-    Handles patterns like:
-    - ₹629 / Rs. 629 / INR 629
-    - @4999 / @ 4999 (handles trailing dots like @99.)
-    - 4,999/-
+    - Ignores percentages (e.g., 80% off, upto 50%).
+    - Handles currency patterns like ₹629, Rs. 629, @4999, 4,999/-
     """
     if not text:
         return None
 
+    # 1. Clean up percentage / discount clauses first so they don't get matched as prices
+    cleaned_text = re.sub(r'\d+\s*%\s*(?:off|discount)?', '', text, flags=re.IGNORECASE)
+    cleaned_text = re.sub(r'(?:upto|flat|save|min|max|extra)\s*\d+\s*%', '', cleaned_text, flags=re.IGNORECASE)
+
+    # 2. Match strict currency/price patterns
     patterns = [
         r"(?:₹|Rs\.?|INR)\s*(?P<p>[\d,]+(?:\.\d+)?)(?=\b|\s|$)",
         r"@\s*(?P<p>[\d,]+(?:\.\d+)?)",
@@ -113,25 +117,24 @@ def extract_price_from_text(text: str) -> Optional[float]:
     ]
 
     for pattern in patterns:
-        match = re.search(pattern, text, re.I)
+        match = re.search(pattern, cleaned_text, re.I)
         if match:
             raw = match.group("p").rstrip(".")
             try:
                 price = float(raw.replace(",", ""))
-                if price > 0:
+                if price > 50:  # Valid price threshold
                     return price
             except ValueError:
                 continue
 
-    return clean_price(text)
+    return clean_price(cleaned_text)
 
 
 def get_offer_price(text: str, url: Optional[str] = None) -> Optional[float]:
     """
     Smart Fallback:
-    1. Pehle text se price nikalne ki koshish karta hai.
-    2. Agar text mein price na mile aur URL available ho, toh 
-       URL resolve karke web page se live price fetch kar leta hai.
+    1. Extracts price from text safely (ignoring percentages).
+    2. Fallback to live product page scraping if needed.
     """
     price = extract_price_from_text(text)
     if price and price > 0:
@@ -286,7 +289,7 @@ def _walk_json_prices(data, candidates: list[float]) -> None:
                 "currentprice", "finalprice", "saleprice", "offerprice",
             }:
                 price = clean_price(value)
-                if price:
+                if price and price > 50:
                     candidates.append(price)
             else:
                 _walk_json_prices(value, candidates)
@@ -324,7 +327,7 @@ def extract_page_price(html: str) -> Optional[float]:
     for pattern in patterns:
         for match in re.finditer(pattern, html, re.I):
             price = clean_price(match.group("p"))
-            if price:
+            if price and price > 50:
                 candidates.append(price)
 
     if candidates:
@@ -333,7 +336,7 @@ def extract_page_price(html: str) -> Optional[float]:
     for pattern in [r"(?:₹|Rs\.?|INR)\s*(?P<p>[\d,]+(?:\.\d+)?)"]:
         for match in re.finditer(pattern, html, re.I):
             price = clean_price(match.group("p"))
-            if price:
+            if price and price > 50:
                 candidates.append(price)
 
     return min(candidates) if candidates else None
@@ -377,7 +380,7 @@ def extract_history(html: str) -> dict:
         for match in re.finditer(pattern, combined, re.I):
             raw_price = match.groupdict().get("p") if match.groupdict() else match.group(1)
             price = clean_price(raw_price)
-            if price:
+            if price and price > 50:
                 values.append(price)
 
     if not values:
@@ -414,7 +417,7 @@ async def gather_evidence(product_url: str) -> list[dict]:
     page_price, history = await asyncio.gather(*tasks, return_exceptions=True)
     out: list[dict] = []
 
-    if isinstance(page_price, (int, float)) and page_price > 0:
+    if isinstance(page_price, (int, float)) and page_price > 50:
         out.append({
             "provider": "retailer_page",
             "kind": "current_price",

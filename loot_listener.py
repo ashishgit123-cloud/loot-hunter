@@ -23,13 +23,13 @@ from groq import Groq
 
 from deal_validator import validate_deal
 from deal_models import Verdict
-from deal_sources import get_offer_price, resolve_url, canonical_url
+from deal_sources import get_offer_price, resolve_url, canonical_url, fetch_product_price
 
-# Suppress Flask/Werkzeug HTTP access logs (GET /stats 200 clutter)
+# Suppress Flask/Werkzeug HTTP access logs
 werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.ERROR)
 
-VERSION = "6.2"
+VERSION = "6.5"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -49,7 +49,6 @@ MAX_CONCURRENCY = int(os.getenv("MAX_CONCURRENCY", "6"))
 DEDUP_TTL_SECONDS = int(os.getenv("DEDUP_TTL_SECONDS", "21600"))
 HEARTBEAT_SECONDS = int(os.getenv("HEARTBEAT_SECONDS", "120"))
 
-# Initialize Groq Client using your GROQ_API_KEY from Railway variables
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
@@ -61,9 +60,8 @@ sem = asyncio.Semaphore(MAX_CONCURRENCY)
 
 seen = OrderedDict()
 
-# --- SQLITE DATABASE INITIALIZATION ---
 DB_FILE = "loot_history.db"
-DEAL_TTL_SECONDS = 7 * 24 * 60 * 60  # Increased to 7 Days for safety
+DEAL_TTL_SECONDS = 7 * 24 * 60 * 60
 
 def init_db():
     try:
@@ -84,7 +82,6 @@ def init_db():
         """)
         conn.commit()
         conn.close()
-        print("SQLite Database initialized successfully.")
     except Exception as e:
         print(f"Database initialization error: {e}")
 
@@ -96,6 +93,7 @@ DEALS_SCANNED = 0
 RECENT_DEALS = deque(maxlen=20)
 POSTED_DEALS = deque(maxlen=20)
 RECENT_LOGS = deque(maxlen=50)
+TRACKER_LOGS = deque(maxlen=50)
 
 app = Flask(__name__)
 
@@ -116,6 +114,7 @@ def stats():
         "recent_deals": list(RECENT_DEALS),
         "posted_deals": list(POSTED_DEALS),
         "recent_logs": list(RECENT_LOGS),
+        "tracker_logs": list(TRACKER_LOGS),
         "channels_count": CHANNELS_COUNT,
         "uptime": get_uptime_string(),
         "dedup_size": len(seen),
@@ -141,15 +140,6 @@ def search_db():
             LIMIT 15
         """, (f"%{query}%", f"%{query}%"))
         rows = cursor.fetchall()
-        
-        if not rows:
-            cursor.execute("""
-                SELECT title, price, min_price, avg_price, source, url, timestamp 
-                FROM historical_deals 
-                ORDER BY timestamp DESC 
-                LIMIT 5
-            """)
-            rows = cursor.fetchall()
         conn.close()
         
         matched_deals = []
@@ -157,12 +147,8 @@ def search_db():
         for row in rows:
             title, price, min_price, avg_price, source, url, timestamp = row
             deal_obj = {
-                "title": title[:100],
-                "price": price,
-                "min_price": min_price,
-                "avg_price": avg_price,
-                "source": source,
-                "url": url,
+                "title": title[:100], "price": price, "min_price": min_price,
+                "avg_price": avg_price, "source": source, "url": url,
                 "time": datetime.fromtimestamp(timestamp).strftime("%H:%M:%S")
             }
             matched_deals.append(deal_obj)
@@ -172,46 +158,41 @@ def search_db():
         if groq_client and deals_context:
             try:
                 context_str = "\n".join(deals_context)
-                prompt = (
-                    f"You are an AI shopping and deal assistant for a Telegram loot channel. "
-                    f"The user is searching for: '{query}'.\n"
-                    f"Here are the matching/recent deals from the database:\n{context_str}\n\n"
-                    f"Provide a helpful, friendly, and concise response summarizing the best matching deals, comparing prices if possible, and answering the user's query like an expert shopping assistant."
-                )
+                prompt = f"AI Shopping Assistant. Query: '{query}'. Deals:\n{context_str}\nSummarize best matches."
                 completion = groq_client.chat.completions.create(
-                    model="llama3-70b-8192",
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=250,
-                    temperature=0.7
+                    model="llama3-70b-8192", messages=[{"role": "user", "content": prompt}], max_tokens=250, temperature=0.7
                 )
                 ai_answer = completion.choices[0].message.content.strip()
-            except Exception as llm_err:
-                ai_answer = f"Found {len(matched_deals)} relevant deals matching your search."
+            except Exception:
+                ai_answer = f"Found {len(matched_deals)} relevant deals."
         else:
-            ai_answer = f"Here are the top deals found for '{query}':" if matched_deals else "No matching deals found in the database."
+            ai_answer = f"Here are the top deals found for '{query}':" if matched_deals else "No matching deals found."
 
-        return jsonify({
-            "answer": ai_answer,
-            "deals": matched_deals
-        })
+        return jsonify({"answer": ai_answer, "deals": matched_deals})
+    except Exception:
+        return jsonify({"answer": "An error occurred.", "deals": []})
+
+
+@app.route("/add_watchlist", methods=["POST"])
+def add_watchlist():
+    data = request.json or {}
+    url = data.get("url", "").strip()
+    if not url:
+        return jsonify({"status": "error", "message": "URL is required"}), 400
+    try:
+        with open("watchlist.txt", "a") as f:
+            f.write(url + "\n")
+        return jsonify({"status": "success", "message": "URL added to live watchlist!"})
     except Exception as e:
-        print(f"Search API error: {e}")
-        return jsonify({"answer": "An error occurred while processing your search.", "deals": []})
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# --- CSV EXPORT ENDPOINT FOR UI ---
 @app.route("/export")
 def export_deals_csv():
-    """Exports all SQLite historical deals as a downloadable CSV file."""
     try:
-        purge_old_deals()
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT deal_id, title, price, min_price, avg_price, source, url, verdict, timestamp 
-            FROM historical_deals 
-            ORDER BY timestamp DESC
-        """)
+        cursor.execute("SELECT deal_id, title, price, min_price, avg_price, source, url, verdict, timestamp FROM historical_deals ORDER BY timestamp DESC")
         rows = cursor.fetchall()
         conn.close()
 
@@ -223,14 +204,9 @@ def export_deals_csv():
                 safe_title = str(title).replace('"', '""')
                 yield f'"{deal_id}","{safe_title}","{price}","{min_price}","{avg_price}","{source}","{url}","{verdict}","{time_str}"\n'
 
-        return Response(
-            generate(),
-            mimetype="text/csv",
-            headers={"Content-Disposition": "attachment; filename=loot_database_export.csv"}
-        )
-    except Exception as e:
-        print(f"Export CSV error: {e}")
-        return jsonify({"error": "Failed to export database"}), 500
+        return Response(generate(), mimetype="text/csv", headers={"Content-Disposition": "attachment; filename=loot_database_export.csv"})
+    except Exception:
+        return jsonify({"error": "Failed to export"}), 500
 
 
 def run_web():
@@ -250,24 +226,14 @@ def purge_old_deals():
         pass
 
 
-def is_deal_already_processed(deal_url: str) -> bool:
-    if not deal_url:
-        return False
+def parse_price_to_float(val) -> Optional[float]:
+    if not val or val in {"-", "N/A", "Not Found ❌"}:
+        return None
     try:
-        cutoff = time.time() - DEDUP_TTL_SECONDS
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT 1 FROM historical_deals 
-            WHERE url = ? AND timestamp >= ? 
-            LIMIT 1
-        """, (deal_url, cutoff))
-        row = cursor.fetchone()
-        conn.close()
-        return row is not None
-    except Exception as e:
-        print(f"DB duplicate check error: {e}")
-        return False
+        cleaned = re.sub(r'[^\d.]', '', str(val))
+        return float(cleaned) if cleaned else None
+    except Exception:
+        return None
 
 
 def save_deal_to_sqlite(deal_id: str, title: str, price: any, source: str, url: str, verdict: str, min_price: str, avg_price: str):
@@ -283,9 +249,8 @@ def save_deal_to_sqlite(deal_id: str, title: str, price: any, source: str, url: 
         """, (deal_id, title, str(price), str(min_price), str(avg_price), source, url, verdict, now))
         conn.commit()
         conn.close()
-        print(f"SUCCESS: Saved deal to SQLite -> {title[:30]} ({price})")
     except Exception as e:
-        print(f"CRITICAL SQLite save error: {e}")
+        print(f"SQLite save error: {e}")
 
 
 def load_deals_from_sqlite_on_startup():
@@ -293,47 +258,32 @@ def load_deals_from_sqlite_on_startup():
         purge_old_deals()
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT deal_id, title, price, min_price, avg_price, source, url, verdict, timestamp 
-            FROM historical_deals 
-            ORDER BY timestamp DESC 
-            LIMIT 20
-        """)
+        cursor.execute("SELECT deal_id, title, price, min_price, avg_price, source, url, verdict, timestamp FROM historical_deals ORDER BY timestamp DESC LIMIT 20")
         rows = cursor.fetchall()
         conn.close()
-        
         if rows:
             for row in rows:
                 deal_id, title, price, min_price, avg_price, source, url, verdict_val, timestamp = row
                 item = {
-                    "title": title[:100],
-                    "price": price,
-                    "min_price": min_price,
-                    "avg_price": avg_price,
-                    "source": source,
-                    "url": url,
+                    "title": title[:100], "price": price, "min_price": min_price,
+                    "avg_price": avg_price, "source": source, "url": url,
                     "time": datetime.fromtimestamp(timestamp).strftime("%H:%M:%S")
                 }
                 RECENT_DEALS.append(item)
                 if verdict_val in {Verdict.DEAL.value, Verdict.POSSIBLE_DEAL.value, "DEAL", "POSSIBLE_DEAL"}:
                     POSTED_DEALS.append(item)
-            print(f"Restored {len(rows)} deals from SQLite cache into memory.")
-        else:
-            print("No previous deals found in SQLite cache.")
     except Exception as e:
-        print(f"Error loading SQLite cache: {e}")
+        print(f"Cache load error: {e}")
 
 
 def remember_once(key: str) -> bool:
     now = time.time()
     cutoff = now - DEDUP_TTL_SECONDS
-
     while seen:
         first_key = next(iter(seen))
         if seen[first_key] >= cutoff:
             break
         seen.popitem(last=False)
-
     if key in seen:
         return False
     seen[key] = now
@@ -341,7 +291,6 @@ def remember_once(key: str) -> bool:
 
 
 URL_RE = re.compile(r"https?://[^\s<>]+", re.I)
-
 
 def urls(text: str) -> list[str]:
     out = []
@@ -356,9 +305,7 @@ def title_from(text: str) -> str:
     lines = [x.strip() for x in (text or "").splitlines() if x.strip()]
     for line in lines:
         low = line.lower()
-        if line.startswith(("http://", "https://")):
-            continue
-        if re.fullmatch(r"[\d₹$€£,.\s]+", line):
+        if line.startswith(("http://", "https://")) or re.fullmatch(r"[\d₹$€£,.\s]+", line):
             continue
         if any(k in low for k in ("buy now", "click here", "shop now", "limited time")):
             continue
@@ -371,20 +318,22 @@ async def log(msg: str, error: bool = False):
     timestamp = datetime.now().astimezone().strftime("%H:%M:%S")
     line = f"[{timestamp}] {prefix} {msg}"
     print(line)
-    
     global RECENT_LOGS
-    RECENT_LOGS.appendleft({
-        "time": timestamp,
-        "prefix": prefix,
-        "msg": msg,
-        "is_error": error
-    })
-
+    RECENT_LOGS.appendleft({"time": timestamp, "prefix": prefix, "msg": msg, "is_error": error})
     if LOG_CHANNEL:
         try:
             await client.send_message(LOG_CHANNEL, line)
         except Exception:
             pass
+
+
+async def tracker_log(msg: str, error: bool = False):
+    prefix = "❌" if error else "⚡"
+    timestamp = datetime.now().astimezone().strftime("%H:%M:%S")
+    line = f"[{timestamp}] {prefix} [Tracker] {msg}"
+    print(line)
+    global TRACKER_LOGS
+    TRACKER_LOGS.appendleft({"time": timestamp, "prefix": prefix, "msg": msg, "is_error": error})
 
 
 def channel_allowed(chat) -> bool:
@@ -398,9 +347,8 @@ async def send_result(result, source, title, price, final_url):
     if result.verdict not in {Verdict.DEAL, Verdict.POSSIBLE_DEAL}:
         return
 
-    evidence_prices = [item.price for item in result.evidence if item.price and item.price > 100]
-    evidence_lows = [item.historical_low for item in result.evidence if item.historical_low and item.historical_low > 100]
-    all_prices = evidence_prices + evidence_lows
+    evidence_prices = [item.price for item in result.evidence if item.price and item.price > 50]
+    all_prices = evidence_prices
 
     min_price_str = f"₹{min(all_prices):,.0f}" if all_prices else "-"
     avg_price_str = f"₹{sum(all_prices)/len(all_prices):,.0f}" if all_prices else "-"
@@ -409,69 +357,122 @@ async def send_result(result, source, title, price, final_url):
     price_display = f"₹{price:,.0f}" if isinstance(price, (int, float)) else (price if price else "N/A")
     
     posted_item = {
-        "title": title[:100],
-        "price": price_display,
-        "min_price": min_price_str,
-        "avg_price": avg_price_str,
-        "source": source,
-        "url": final_url,
-        "time": datetime.now().strftime("%H:%M:%S")
+        "title": title[:100], "price": price_display, "min_price": min_price_str,
+        "avg_price": avg_price_str, "source": source, "url": final_url, "time": datetime.now().strftime("%H:%M:%S")
     }
     
     if not POSTED_DEALS or POSTED_DEALS[0]["url"] != final_url:
         POSTED_DEALS.appendleft(posted_item)
 
-    for deal in RECENT_DEALS:
-        if deal["url"] == final_url:
-            deal["min_price"] = min_price_str
-            deal["avg_price"] = avg_price_str
-
     deal_id = hashlib.sha256(f"{final_url}:{title}".encode()).hexdigest()[:16]
-    await asyncio.to_thread(save_deal_to_sqlite, deal_id, title, price_display, source, final_url, result.verdict.value, min_price_str, avg_price_str)
+    save_deal_to_sqlite(deal_id, title, price_display, source, final_url, result.verdict.value, min_price_str, avg_price_str)
 
     emoji = "🔥" if result.verdict == Verdict.DEAL else "🟡"
-    e = result.evidence
-
     lines = [
         f"{emoji} {'VERIFIED DEAL' if result.verdict == Verdict.DEAL else 'POSSIBLE DEAL'}",
-        "",
-        f"📦 {result.offer.title}",
-        f"💰 Telegram price: ₹{result.offer.price:,.0f}",
-        f"🎯 Confidence: {result.confidence:.0%}",
-        f"🧠 {result.reason}",
+        "", f"📦 {result.offer.title}", f"💰 Price: ₹{result.offer.price:,.0f}",
+        f"🎯 Confidence: {result.confidence:.0%}", f"🧠 {result.reason}",
+        "", f"📢 {result.offer.source}", f"🔗 {result.offer.url}"
     ]
-
-    for item in e:
-        bits = [item.provider, item.kind]
-        if item.price and item.price > 100:
-            bits.append(f"₹{item.price:,.0f}")
-        if item.historical_low and item.historical_low > 100:
-            bits.append(f"low ₹{item.historical_low:,.0f}")
-        lines.append("• " + " | ".join(bits))
-
-    for warning in result.warnings:
-        lines.append(f"⚠️ {warning}")
-
-    lines += ["", f"📢 {result.offer.source}", f"🔗 {result.offer.url}"]
     await client.send_message(DESTINATION, "\n".join(lines))
+
+
+# --- PARALLEL BACKGROUND PRICE TRACKER WORKER (Strict 10% Drop Rule) ---
+async def price_tracker_worker():
+    await asyncio.sleep(15)
+    alerted_cache = {}
+    
+    while True:
+        try:
+            watchlist_path = "watchlist.txt"
+            if os.path.exists(watchlist_path):
+                with open(watchlist_path, "r") as f:
+                    urls_to_check = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+                
+                if urls_to_check:
+                    await tracker_log(f"Scanning {len(urls_to_check)} watchlisted items...")
+                    for raw_url in urls_to_check:
+                        try:
+                            resolved = await asyncio.to_thread(resolve_url, raw_url)
+                            canonical = canonical_url(resolved) if resolved else raw_url
+                            if not canonical:
+                                canonical = raw_url
+
+                            live_price = await asyncio.to_thread(fetch_product_price, canonical)
+                            if not live_price or live_price <= 50:
+                                continue
+
+                            conn = sqlite3.connect(DB_FILE)
+                            cursor = conn.cursor()
+                            cursor.execute("SELECT price, min_price, title FROM historical_deals WHERE url = ? ORDER BY timestamp DESC LIMIT 1", (canonical,))
+                            row = cursor.fetchone()
+                            conn.close()
+
+                            if row:
+                                db_price_str, db_min_str, title = row
+                                db_price = parse_price_to_float(db_price_str)
+                                db_min = parse_price_to_float(db_min_str)
+                                
+                                ref_price = db_min if (db_min and db_min > 50) else db_price
+                                
+                                if ref_price and ref_price > 50:
+                                    # Strict condition: Live price must be AT LEAST 10% lower than reference price
+                                    threshold_price = ref_price * 0.90  
+                                    
+                                    if live_price <= threshold_price:
+                                        drop_pct = ((ref_price - live_price) / ref_price) * 100
+                                        alert_key = f"{canonical}:{live_price}"
+                                        
+                                        if alert_key not in alerted_cache:
+                                            alerted_cache[alert_key] = time.time()
+                                            await tracker_log(f"🔥 GENUINE PRICE DROP! Live: ₹{live_price:,.0f} vs Old: ₹{ref_price:,.0f} ({drop_pct:.1f}% cheaper)")
+
+                                            new_min = min(live_price, ref_price)
+                                            new_min_str = f"₹{new_min:,.0f}"
+                                            
+                                            msg = (
+                                                f"🔥 **PRICE DROP ALERT ({drop_pct:.1f}% OFF)**\n\n"
+                                                f"📦 {title}\n"
+                                                f"💰 New Live Price: **₹{live_price:,.0f}**\n"
+                                                f"📉 Previous Price: ₹{ref_price:,.0f}\n"
+                                                f"🎯 Total Drop: {drop_pct:.1f}%\n\n"
+                                                f"🔗 {canonical}"
+                                            )
+                                            await client.send_message(DESTINATION, msg)
+                                            
+                                            deal_id = hashlib.sha256(f"{canonical}:{title}".encode()).hexdigest()[:16]
+                                            save_deal_to_sqlite(
+                                                deal_id, title, f"₹{live_price:,.0f}", 
+                                                "Live Tracker", canonical, "DEAL", 
+                                                new_min_str, f"₹{ref_price:,.0f}"
+                                            )
+                            else:
+                                deal_id = hashlib.sha256(f"{canonical}:Watchlist Baseline".encode()).hexdigest()[:16]
+                                save_deal_to_sqlite(
+                                    deal_id, "Watchlist Monitored Item", f"₹{live_price:,.0f}", 
+                                    "Live Tracker", canonical, "SCANNED", 
+                                    f"₹{live_price:,.0f}", f"₹{live_price:,.0f}"
+                                )
+                        
+                        except Exception as item_err:
+                            pass
+        except Exception as e:
+            await tracker_log(f"Worker error: {e}", error=True)
+            
+        await asyncio.sleep(20)
 
 
 async def process_message(event):
     chat = await event.get_chat()
-    chat_username = getattr(chat, "username", "") or str(chat.id)
-
     if not channel_allowed(chat):
-        await log(f"⏭️ Skipped message from unauthorized/unwatched channel: @{chat_username}", error=True)
         return
 
     text = event.raw_text or ""
     found = urls(text)
     if not found:
-        await log(f"⏭️ [{chat_username}] Skipped message: No URLs found in text snippet.", error=True)
         return
 
     source = f"@{chat.username}" if getattr(chat, "username", None) else str(chat.id)
-
     message_key = f"{chat.id}:{event.id}:{hashlib.sha256(text.encode()).hexdigest()[:12]}"
     if not remember_once(message_key):
         return
@@ -479,15 +480,8 @@ async def process_message(event):
     title = title_from(text)
     first_url = found[0] if found else None
 
-    clean_text_snippet = text.replace('\n', ' ')[:80]
-    await log(f"📥 [{source}] SCAN: '{clean_text_snippet}' | URL: {first_url}")
-
     price = await asyncio.to_thread(get_offer_price, text, first_url)
-    price_status = f"₹{price}" if price else "Not Found ❌"
-    await log(f"💰 [{source}] Price Extracted: {price_status} | Title: {title[:40]}")
-
     if price and price < MIN_PRICE:
-        await log(f"⏭️ [{source}] Skipped: Price ₹{price} is below MIN_PRICE (₹{MIN_PRICE})", error=True)
         return
 
     deal_url = first_url
@@ -496,93 +490,42 @@ async def process_message(event):
             resolved_url = await asyncio.to_thread(resolve_url, first_url)
             if resolved_url:
                 deal_url = await asyncio.to_thread(canonical_url, resolved_url)
-        except Exception as e:
-            await log(f"⚠️ [{source}] URL resolution failed for {first_url}: {e}. Falling back to raw URL.", error=True)
+        except Exception:
             deal_url = first_url
 
     if deal_url and await asyncio.to_thread(is_deal_already_processed, deal_url):
-        await log(f"⏭️ [{source}] Skipped: Deal URL already processed/posted from another channel.", error=True)
         return
 
-    global DEALS_SCANNED, RECENT_DEALS
+    global DEALS_SCANNED
     DEALS_SCANNED += 1
     price_display = f"₹{price:,.0f}" if isinstance(price, (int, float)) else (price if price else "N/A")
     
-    new_deal_item = {
-        "title": title[:100],
-        "price": price_display,
-        "min_price": "-",
-        "avg_price": "-",
-        "source": source,
-        "url": deal_url,
-        "time": datetime.now().strftime("%H:%M:%S")
-    }
-    
-    if not RECENT_DEALS or RECENT_DEALS[0]["url"] != deal_url:
-        RECENT_DEALS.appendleft(new_deal_item)
-
     deal_id = hashlib.sha256(f"{deal_url}:{title}".encode()).hexdigest()[:16]
-    # SAVE SCANNED DEAL TO SQLITE IMMEDIATELY
-    await asyncio.to_thread(save_deal_to_sqlite, deal_id, title, price_display, source, deal_url, "SCANNED", "-", "-")
+    save_deal_to_sqlite(deal_id, title, price_display, source, deal_url, "SCANNED", "-", "-")
 
     for url in found[:3]:
         async with sem:
             try:
-                try:
-                    res_url = await asyncio.to_thread(resolve_url, url)
-                    final_url = (await asyncio.to_thread(canonical_url, res_url)) if res_url else url
-                except Exception:
-                    final_url = url
-
-                await log(f"🔍 [{source}] Validating URL... Target: {final_url}")
-
-                result = await asyncio.wait_for(
-                    validate_deal(title, price, final_url, source, text),
-                    timeout=45,
-                )
-
-                evidence_prices = [item.price for item in result.evidence if item.price and item.price > 100]
-                evidence_lows = [item.historical_low for item in result.evidence if item.historical_low and item.historical_low > 100]
-                all_prices = evidence_prices + evidence_lows
-                min_found = f"₹{min(all_prices):,.0f}" if all_prices else "Not Found ❌"
-
-                is_err = result.verdict not in {Verdict.DEAL, Verdict.POSSIBLE_DEAL}
-                await log(
-                    f"🎯 [{source}] Verdict: {result.verdict.value} | TG Price: {price_status} | "
-                    f"Evidence MinRef: {min_found} | Reason: {result.reason}",
-                    error=is_err
-                )
-                
+                res_url = await asyncio.to_thread(resolve_url, url)
+                final_url = (await asyncio.to_thread(canonical_url, res_url)) if res_url else url
+                result = await asyncio.wait_for(validate_deal(title, price, final_url, source, text), timeout=45)
                 await send_result(result, source, title, price, final_url)
-            except asyncio.TimeoutError:
-                await log(f"❌ Validation timeout on URL: {url}", error=True)
-            except Exception as exc:
-                await log(
-                    f"❌ Processing error {type(exc).__name__}: {exc}\n{traceback.format_exc()}",
-                    error=True,
-                )
+            except Exception:
+                pass
 
 
 @client.on(events.NewMessage)
 async def on_new_message(event):
     try:
         await process_message(event)
-    except Exception as exc:
-        await log(f"NewMessage error: {type(exc).__name__}: {exc}", error=True)
-
-
-@client.on(events.MessageEdited)
-async def on_edited_message(event):
-    try:
-        await process_message(event)
-    except Exception as exc:
-        await log(f"MessageEdited error: {type(exc).__name__}: {exc}", error=True)
+    except Exception:
+        pass
 
 
 async def heartbeat():
     while True:
         await asyncio.sleep(HEARTBEAT_SECONDS)
-        await log(f"HEARTBEAT v{VERSION} | scanned={DEALS_SCANNED} | posted={len(POSTED_DEALS)} | channels={CHANNELS_COUNT} | uptime={get_uptime_string()}")
+        await log(f"HEARTBEAT v{VERSION} | scanned={DEALS_SCANNED} | uptime={get_uptime_string()}")
 
 
 async def discover():
@@ -591,8 +534,7 @@ async def discover():
     dialogs = await client.get_dialogs()
     count = 0
     for dialog in dialogs:
-        entity = dialog.entity
-        if getattr(entity, "broadcast", False):
+        if getattr(dialog.entity, "broadcast", False):
             count += 1
     CHANNELS_COUNT = count
     await log(f"Listening to {count} broadcast channels")
@@ -601,18 +543,21 @@ async def discover():
 async def main():
     web_thread = threading.Thread(target=run_web, daemon=True)
     web_thread.start()
-    await log(f"Web dashboard thread started")
+    await log("Web dashboard thread started")
+
+    asyncio.create_task(price_tracker_worker())
+    await tracker_log("Live Price Tracker worker spawned in parallel background loop.")
 
     await client.start()
     me = await client.get_me()
     await log(f"Started v{VERSION} as @{getattr(me, 'username', None) or me.first_name}")
     await discover()
+    
     hb = asyncio.create_task(heartbeat())
     try:
         await client.run_until_disconnected()
     finally:
         hb.cancel()
-        await asyncio.gather(hb, return_exceptions=True)
 
 
 if __name__ == "__main__":
