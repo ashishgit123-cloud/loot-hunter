@@ -302,8 +302,6 @@ def search_db():
         print("Search error:", e)
         return jsonify({"answer": "An error occurred while processing your request.", "deals": []})
 
-from flask import redirect # Agar pehle se import nahi hai toh top par add kar lein
-
 @app.route("/add_watchlist", methods=["POST"])
 def add_watchlist():
     global WATCHED_ITEMS
@@ -358,7 +356,7 @@ def add_watchlist():
         return redirect("/")
         
     return jsonify({"status": "success", "message": f"Added: {product_title} (Target: ₹{target_price:,.0f})"})
-    
+
 @app.route("/export")
 def export_deals_csv():
     try:
@@ -897,46 +895,6 @@ async def discover():
     CHANNELS_COUNT = count
     await log(f"Listening to {count} broadcast channels")
 
-function addToWatchlist() {
-    const urlInput = document.getElementById("watchlist-url");
-    const targetPriceInput = document.getElementById("target-price");
-    
-    const url = urlInput.value.trim();
-    const targetPrice = targetPriceInput ? parseFloat(targetPriceInput.value) || 0 : 0;
-
-    if (!url) {
-        alert("Please enter a valid URL!");
-        return;
-    }
-
-    // Backend par JSON data bhejna
-    fetch('/add_watchlist', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            url: url,
-            target_price: targetPrice
-        })
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.status === 'success') {
-            alert(data.message);
-            urlInput.value = '';
-            if (targetPriceInput) targetPriceInput.value = '';
-            // Refresh stats or watchlist UI if needed
-            location.reload(); 
-        } else {
-            alert("Error: " + data.message);
-        }
-    })
-    .catch(error => {
-        console.error('Error:', error);
-        alert("Failed to add to watchlist.");
-    });
-}
 
 async def main():
     web_thread = threading.Thread(target=run_web, daemon=True)
