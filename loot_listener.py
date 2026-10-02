@@ -563,12 +563,33 @@ async def send_result(result, source, title, price, final_url, min_price_str, av
 
 def fetch_live_price(url: str) -> str:
     try:
+        from deal_sources import get_offer_price
+        price_val = get_offer_price("", url)
+        if isinstance(price_val, (int, float)) and price_val > 0:
+            return f"₹{price_val:,.0f}"
+    except Exception as e:
+        print(f"Error fetching live price using deal_sources for {url}: {e}")
+    
+    try:
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9,hi;q=0.8"
         }
         resp = requests.get(url, headers=headers, timeout=8)
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, 'html.parser')
+            
+            # Amazon ke liye sabse reliable class jo sirf current selling price deti hai (taxes ko chhor kar)
+            price_elem = soup.select_one(".priceToPay .a-price-whole") or soup.select_one(".a-price .a-price-whole") or soup.select_one("#priceblock_ourprice") or soup.select_one("#priceblock_dealprice")
+            
+            if price_elem:
+                cleaned = re.sub(r'[^\d.]', '', price_elem.get_text())
+                if cleaned:
+                    val = float(cleaned)
+                    if val > 0:
+                        return f"₹{val:,.0f}"
+                        
+            # Agar class se na mile, toh text search karte waqt tax wali line ko skip karne ka logic
             text_content = soup.get_text()
             prices = re.findall(r'(?:₹|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)', text_content, re.IGNORECASE)
             if prices:
@@ -576,14 +597,18 @@ def fetch_live_price(url: str) -> str:
                 for p in prices:
                     try:
                         val = float(p.replace(',', ''))
-                        if val > 0:
+                        # Bahut kam ya bahut zyada values (jaise tax % ya MRP ke bade/chote figures) filter out karne ke liye
+                        if 50 < val < 500000: 
                             cleaned_prices.append(val)
                     except:
                         continue
                 if cleaned_prices:
+                    # Sabse choti realistic price hi aam taur par current selling price hoti hai
                     return f"₹{min(cleaned_prices):,.0f}"
+                    
     except Exception as e:
-        print(f"Error fetching live price for {url}: {e}")
+        print(f"Fallback scraper error for {url}: {e}")
+        
     return None
 
 # Background Thread jo saare watchlist items ko track karega
