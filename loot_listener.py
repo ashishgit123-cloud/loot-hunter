@@ -201,39 +201,62 @@ def search_db():
         return jsonify({"answer": "Please enter a search query.", "deals": []})
     
     try:
-        # Step 1: Use LLM to extract the core product keyword from conversational sentence
-        search_keyword = query
+        purge_old_deals()
+        
+        # Default fallback query agar LLM generate na kar paye
+        sql_query = """
+            SELECT title, price, min_price, avg_price, source, url, timestamp 
+            FROM historical_deals 
+            WHERE title ILIKE %s 
+            ORDER BY timestamp DESC 
+            LIMIT 15
+        """
+        sql_params = (f"%{query}%",)
+        
+        # Step 1: Groq LLM se SQL query banwayein
         if groq_client:
             try:
-                extract_prompt = (
-                    "Extract only the core product, item, or brand keyword from the user's query for a database search. "
-                    "Return ONLY the single keyword/term (e.g., if query is 'shoes h kya deal me', return 'shoes'). "
-                    "Do not add extra punctuation or words.\n\nQuery: " + query
+                sql_prompt = (
+                    "You are an expert PostgreSQL query generator. "
+                    "The table name is `historical_deals` with columns: "
+                    "`title` (TEXT), `price` (REAL), `min_price` (REAL), `avg_price` (REAL), `source` (TEXT), `url` (TEXT), `timestamp` (BIGINT). "
+                    "Write a safe, read-only PostgreSQL SELECT query to answer the user's natural language question. "
+                    "CRITICAL RULES: "
+                    "1. Return ONLY the raw SQL query string. No markdown formatting (no ```sql), no explanation. "
+                    "2. Always use ILIKE for text matching where applicable. "
+                    "3. Limit results to max 15 rows. "
+                    f"User Question: '{query}'"
                 )
                 completion = groq_client.chat.completions.create(
                     model="llama3-70b-8192",
-                    messages=[{"role": "user", "content": extract_prompt}],
-                    max_tokens=20,
-                    temperature=0.1
+                    messages=[{"role": "user", "content": sql_prompt}],
+                    max_tokens=150,
+                    temperature=0.0
                 )
-                extracted = completion.choices[0].message.content.strip().lower()
-                if extracted and len(extracted) < 30:
-                    search_keyword = extracted
+                generated_sql = completion.choices[0].message.content.strip()
+                
+                # Markdown formatting clean karne ke liye agar LLM ne lagayi ho
+                if generated_sql.startswith("```"):
+                    generated_sql = generated_sql.split("```")[1]
+                    if generated_sql.startswith("sql"):
+                        generated_sql = generated_sql[3:].strip()
+                
+                # Safety check: Sirf SELECT queries allow karein
+                if generated_sql.upper().startswith("SELECT"):
+                    sql_query = generated_sql
+                    sql_params = () # LLM query ke andar values safely embed karta hai
             except Exception as e:
-                pass
+                print("LLM SQL generation error:", e)
 
-        purge_old_deals()
+        # Step 2: Database mein query execute karein
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Step 2: Search database using the extracted keyword as well as original query
-        cursor.execute("""
-            SELECT title, price, min_price, avg_price, source, url, timestamp 
-            FROM historical_deals 
-            WHERE title ILIKE %s OR source ILIKE %s OR title ILIKE %s
-            ORDER BY timestamp DESC 
-            LIMIT 15
-        """, (f"%{search_keyword}%", f"%{search_keyword}%", f"%{query}%"))
+        if sql_params:
+            cursor.execute(sql_query, sql_params)
+        else:
+            cursor.execute(sql_query)
+            
         rows = cursor.fetchall()
         conn.close()
         
@@ -241,27 +264,31 @@ def search_db():
         for row in rows:
             title, price, min_price, avg_price, source, url, timestamp = row
             deal_obj = {
-                "title": title[:100], "price": price, "min_price": min_price,
-                "avg_price": avg_price, "source": source, "url": url,
+                "title": title[:100] if title else "", 
+                "price": price, 
+                "min_price": min_price,
+                "avg_price": avg_price, 
+                "source": source, 
+                "url": url,
                 "time": datetime.fromtimestamp(timestamp, IST).strftime("%H:%M:%S") if timestamp else datetime.now(IST).strftime("%H:%M:%S")
             }
             matched_deals.append(deal_obj)
 
         if not matched_deals:
             return jsonify({
-                "answer": f"Maaf kijiye, database mein '{search_keyword}' se related koi bhi deal available nahi hai.",
+                "answer": f"Maaf kijiye, aapke sawaal '{query}' ke liye database mein koi matching deal nahi mili.",
                 "deals": []
             })
 
+        # Step 3: Results ko LLM se format karwa kar user ko bhejein
         deals_context = [f"- Title: {d['title']} | Price: {d['price']} | Source: {d['source']} | URL: {d['url']}" for d in matched_deals]
-        
-        ai_answer = f"Yahan '{search_keyword}' se related deals mili hain:"
+        ai_answer = f"Yahan aapke sawaal se related deals hain:"
         if groq_client:
             try:
                 context_str = "\n".join(deals_context)
                 prompt = (
-                    "You are a helpful Loot Deals Assistant. Answer the user's conversational query naturally based on the database deals found below.\n\n"
-                    f"User Query: '{query}'\n\nDatabase Deals Found:\n{context_str}"
+                    "You are a helpful Loot Deals Assistant. Answer the user's conversational query naturally and highlight the best/cheapest deals based on the data below.\n\n"
+                    f"User Query: '{query}'\n\nDatabase Results:\n{context_str}"
                 )
                 completion = groq_client.chat.completions.create(
                     model="llama3-70b-8192", 
@@ -275,8 +302,9 @@ def search_db():
 
         return jsonify({"answer": ai_answer, "deals": matched_deals})
     except Exception as e:
-        return jsonify({"answer": "An error occurred while processing your request.", "deals": []})
-
+        print("Search error:", e)
+        return jsonify({"answer": "An error occurred while executing your query.", "deals": []})
+        
 @app.route("/add_watchlist", methods=["POST"])
 def add_watchlist():
     global WATCHED_ITEMS
