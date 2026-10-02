@@ -126,95 +126,6 @@
             flex-grow: 1;
         }
 
-        /* AI Chatbot Section Styling */
-        .chat-container {
-            background: var(--card-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-            margin-bottom: 5px;
-        }
-
-        .chat-header {
-            padding: 10px 15px;
-            background: rgba(255,255,255,0.02);
-            border-bottom: 1px solid var(--border-color);
-            font-size: 0.85rem;
-            font-weight: 600;
-            color: var(--accent-blue);
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        .chat-box {
-            height: 180px;
-            overflow-y: auto;
-            padding: 12px;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            background: var(--bg-color);
-        }
-
-        .chat-msg {
-            padding: 8px 12px;
-            border-radius: 8px;
-            max-width: 85%;
-            font-size: 0.8rem;
-            line-height: 1.4;
-            word-wrap: break-word;
-        }
-
-        .bot-msg {
-            background: var(--card-bg);
-            border: 1px solid var(--border-color);
-            align-self: flex-start;
-            color: var(--text-main);
-        }
-
-        .user-msg {
-            background: var(--accent-blue);
-            color: #090d16;
-            font-weight: 500;
-            align-self: flex-end;
-        }
-
-        .chat-input-area {
-            display: flex;
-            padding: 10px;
-            background: rgba(255,255,255,0.01);
-            border-top: 1px solid var(--border-color);
-            gap: 8px;
-        }
-
-        .chat-input {
-            flex: 1;
-            background: var(--bg-color);
-            border: 1px solid var(--border-color);
-            padding: 8px 12px;
-            border-radius: 6px;
-            color: var(--text-main);
-            font-size: 0.85rem;
-            outline: none;
-        }
-        .chat-input:focus { border-color: var(--accent-blue); }
-
-        .chat-send-btn {
-            background: var(--accent-blue);
-            color: #090d16;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 6px;
-            font-weight: bold;
-            font-size: 0.85rem;
-            cursor: pointer;
-        }
-        .chat-send-btn:hover { opacity: 0.9; }
-
         .top-section {
             display: grid;
             grid-template-columns: 240px 1fr 1fr 1fr;
@@ -399,6 +310,130 @@
         .log-info { color: #cbd5e1; word-break: break-all; }
         .log-error { color: var(--accent-red); font-weight: bold; word-break: break-all; }
 
+        /* Floating Sidebar Chatbot Styling */
+        .chat-widget-btn {
+            position: fixed;
+            bottom: 25px;
+            right: 25px;
+            background: var(--accent-blue);
+            color: #090d16;
+            width: 55px;
+            height: 55px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            cursor: pointer;
+            box-shadow: 0 4px 20px rgba(56, 189, 248, 0.4);
+            z-index: 1000;
+            border: none;
+            transition: transform 0.2s;
+        }
+        .chat-widget-btn:hover { transform: scale(1.08); }
+
+        .chat-popup {
+            position: fixed;
+            bottom: 95px;
+            right: 25px;
+            width: 360px;
+            height: 480px;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 14px;
+            display: none;
+            flex-direction: column;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            z-index: 1000;
+            overflow: hidden;
+        }
+        .chat-popup.active { display: flex; }
+
+        .chat-popup-header {
+            padding: 12px 16px;
+            background: rgba(56, 189, 248, 0.08);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: bold;
+            font-size: 0.85rem;
+            color: var(--accent-blue);
+        }
+
+        .chat-close-btn {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 1rem;
+        }
+        .chat-close-btn:hover { color: var(--text-main); }
+
+        .chat-popup-body {
+            flex-grow: 1;
+            padding: 12px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            background: var(--bg-color);
+        }
+
+        .chat-msg {
+            padding: 8px 12px;
+            border-radius: 8px;
+            max-width: 85%;
+            font-size: 0.8rem;
+            line-height: 1.4;
+            word-wrap: break-word;
+        }
+
+        .bot-msg {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            align-self: flex-start;
+            color: var(--text-main);
+        }
+
+        .user-msg {
+            background: var(--accent-blue);
+            color: #090d16;
+            font-weight: 500;
+            align-self: flex-end;
+        }
+
+        .chat-popup-footer {
+            display: flex;
+            padding: 10px;
+            background: var(--card-bg);
+            border-top: 1px solid var(--border-color);
+            gap: 8px;
+        }
+
+        .chat-popup-input {
+            flex: 1;
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            padding: 8px 12px;
+            border-radius: 6px;
+            color: var(--text-main);
+            font-size: 0.85rem;
+            outline: none;
+        }
+        .chat-popup-input:focus { border-color: var(--accent-blue); }
+
+        .chat-popup-send {
+            background: var(--accent-blue);
+            color: #090d16;
+            border: none;
+            padding: 8px 14px;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .chat-popup-send:hover { opacity: 0.9; }
+
         ::-webkit-scrollbar { width: 5px; height: 5px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
@@ -409,6 +444,11 @@
             }
             .feed-container {
                 height: 350px;
+            }
+            .chat-popup {
+                width: 90vw;
+                right: 5vw;
+                height: 420px;
             }
         }
     </style>
@@ -430,22 +470,6 @@
 
     <div class="dashboard-container">
         
-        <!-- AI Chatbot Search Bar Widget -->
-        <div class="chat-container">
-            <div class="chat-header">
-                💬 AI Deal Assistant Chatbot
-            </div>
-            <div class="chat-box" id="chatBox">
-                <div class="chat-msg bot-msg">
-                    Hello! Main aapka AI Assistant hoon. Aap mujhse kisi bhi product ya deal ke baare mein pooch sakte hain (jaise: "phone under 15000").
-                </div>
-            </div>
-            <div class="chat-input-area">
-                <input type="text" id="chatInput" class="chat-input" placeholder="Ask AI anything about past deals..." onkeypress="handleChatKey(event)">
-                <button class="chat-send-btn" onclick="sendChatMessage()">Send</button>
-            </div>
-        </div>
-
         <div class="top-section">
             <!-- Metrics Column -->
             <div class="metrics-col">
@@ -478,7 +502,7 @@
                 </div>
             </div>
 
-            <!-- Scanned Feed / Search Results -->
+            <!-- Scanned Feed -->
             <div class="feed-container">
                 <div class="feed-header">
                     <h2 id="feedTitle">🔍 Scanned Stream</h2>
@@ -538,9 +562,36 @@
 
     </div>
 
+    <!-- Floating Chatbot Widget (Bottom Right) -->
+    <button class="chat-widget-btn" onclick="toggleChatPopup()">💬</button>
+    
+    <div class="chat-popup" id="chatPopup">
+        <div class="chat-popup-header">
+            <span>🛍️ AI Shopping Assistant</span>
+            <button class="chat-close-btn" onclick="toggleChatPopup()">✖</button>
+        </div>
+        <div class="chat-popup-body" id="chatBox">
+            <div class="chat-msg bot-msg">
+                Hello! Main aapka AI Assistant hoon. Aap mujhse kisi bhi product, deal ya shopping advice ke baare mein pooch sakte hain!
+            </div>
+        </div>
+        <div class="chat-popup-footer">
+            <input type="text" id="chatInput" class="chat-popup-input" placeholder="Type a message..." onkeypress="handleChatKey(event)">
+            <button class="chat-popup-send" onclick="sendChatMessage()">Send</button>
+        </div>
+    </div>
+
     <script>
         let activeLogMode = 'system';
         let cachedData = null;
+
+        function toggleChatPopup() {
+            let popup = document.getElementById('chatPopup');
+            popup.classList.toggle('active');
+            if (popup.classList.contains('active')) {
+                document.getElementById('chatInput').focus();
+            }
+        }
 
         function switchLogTab(mode) {
             activeLogMode = mode;
@@ -677,7 +728,7 @@
             }
         }
 
-        // Chatbot Search Handler
+        // Floating Chatbot Message Handler
         async function sendChatMessage() {
             let inputField = document.getElementById('chatInput');
             let query = inputField.value.trim();
@@ -685,14 +736,14 @@
 
             let chatBox = document.getElementById('chatBox');
             
-            // Add User Message
+            // User Message
             chatBox.innerHTML += `<div class="chat-msg user-msg">${escapeHtml(query)}</div>`;
             inputField.value = '';
             chatBox.scrollTop = chatBox.scrollHeight;
 
             // Loading state
             let loadId = 'loading-' + Date.now();
-            chatBox.innerHTML += `<div id="${loadId}" class="chat-msg bot-msg">Searching database & analyzing with AI...</div>`;
+            chatBox.innerHTML += `<div id="${loadId}" class="chat-msg bot-msg">Thinking & analyzing deals...</div>`;
             chatBox.scrollTop = chatBox.scrollHeight;
 
             try {
@@ -701,11 +752,11 @@
                 
                 document.getElementById(loadId).remove();
 
-                let botAnswer = data.answer || "No details found.";
+                let botAnswer = data.answer || "No response found.";
                 let dealsHtml = "";
                 
                 if (data.deals && data.deals.length > 0) {
-                    dealsHtml += "<br><br><b>Matching Deals:</b>";
+                    dealsHtml += "<br><br><b>Relevant Deals:</b>";
                     data.deals.forEach(deal => {
                         dealsHtml += `
                             <div style="background: var(--bg-color); border: 1px solid var(--border-color); padding: 6px; border-radius: 6px; margin-top: 5px; font-size: 0.75rem;">
@@ -720,7 +771,7 @@
                 chatBox.innerHTML += `<div class="chat-msg bot-msg">${botAnswer}${dealsHtml}</div>`;
             } catch (err) {
                 document.getElementById(loadId).remove();
-                chatBox.innerHTML += `<div class="chat-msg bot-msg">Sorry, an error occurred while searching.</div>`;
+                chatBox.innerHTML += `<div class="chat-msg bot-msg">Sorry, an error occurred while connecting to AI.</div>`;
             }
             chatBox.scrollTop = chatBox.scrollHeight;
         }

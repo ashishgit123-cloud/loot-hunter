@@ -227,22 +227,31 @@ def search_db():
             deals_context.append(f"- Title: {title} | Price: {price} | Source: {source} | URL: {url}")
 
         ai_answer = ""
-        if groq_client and deals_context:
+        if groq_client:
             try:
-                context_str = "\n".join(deals_context)
-                prompt = f"AI Shopping Assistant. Query: '{query}'. Deals:\n{context_str}\nSummarize best matches."
+                context_str = "\n".join(deals_context) if deals_context else "No direct deals found in database for this query."
+                prompt = (
+                    "You are an expert, friendly AI Shopping & Loot Deals Assistant. "
+                    "Answer the user's query conversationally and intelligently like a true AI chatbot. "
+                    "If database deals are provided below, incorporate them naturally. "
+                    "If no exact deals are found in the database, provide helpful shopping guidance, what prices to expect, or smart advice related to their query.\n\n"
+                    f"User Query: '{query}'\n\nDatabase Deals Available:\n{context_str}"
+                )
                 completion = groq_client.chat.completions.create(
-                    model="llama3-70b-8192", messages=[{"role": "user", "content": prompt}], max_tokens=250, temperature=0.7
+                    model="llama3-70b-8192", 
+                    messages=[{"role": "user", "content": prompt}], 
+                    max_tokens=300, 
+                    temperature=0.7
                 )
                 ai_answer = completion.choices[0].message.content.strip()
-            except Exception:
-                ai_answer = f"Found {len(matched_deals)} relevant deals."
+            except Exception as e:
+                ai_answer = f"Found {len(matched_deals)} matching deals."
         else:
             ai_answer = f"Here are the top deals found for '{query}':" if matched_deals else "No matching deals found."
 
         return jsonify({"answer": ai_answer, "deals": matched_deals})
-    except Exception:
-        return jsonify({"answer": "An error occurred.", "deals": []})
+    except Exception as e:
+        return jsonify({"answer": "An error occurred while processing your request.", "deals": []})
 
 @app.route("/add_watchlist", methods=["POST"])
 def add_watchlist():
