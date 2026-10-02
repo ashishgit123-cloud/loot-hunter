@@ -177,21 +177,18 @@ def get_uptime_string() -> str:
     return f"{hours}h {minutes}m"
 
 @app.route("/stats")
-def stats():
-    global WATCHED_ITEMS
-    WATCHED_ITEMS = load_watchlist_from_db()
+def get_stats():
+    # Yahan ensure karein ki 'watched_items' mein poori list bheji ja rahi hai
     return jsonify({
-        "deals_scanned": DEALS_SCANNED,
-        "recent_deals": list(RECENT_DEALS),
-        "posted_deals": list(POSTED_DEALS),
-        "recent_logs": list(RECENT_LOGS),
-        "tracker_logs": list(TRACKER_LOGS),
-        "watched_items": WATCHED_ITEMS,
-        "channels_count": CHANNELS_COUNT,
-        "uptime": get_uptime_string(),
-        "dedup_size": len(seen),
-        "concurrency": MAX_CONCURRENCY,
-        "version": VERSION
+        "deals_scanned": total_deals_scanned_count,
+        "posted_deals": posted_deals_cache,
+        "watched_items": watched_items_cache, # Yeh saare watched items ki list honi chahiye
+        "channels_count": len(TELEGRAM_CHANNELS),
+        "uptime": get_bot_uptime(),
+        "dedup_size": len(seen_deals_cache),
+        "recent_deals": recent_scanned_cache,
+        "recent_logs": system_logs_cache,
+        "tracker_logs": tracker_logs_cache
     })
 
 @app.route("/search")
@@ -564,61 +561,58 @@ async def send_result(result, source, title, price, final_url, min_price_str, av
         except Exception:
             pass
 
-async def price_tracker_worker():
+# Background Thread jo saare watchlist items ko track karega
+def price_tracker_worker():
+    global watched_items_cache, tracker_logs
     while True:
         try:
-            global WATCHED_ITEMS
-            # Database se current watchlist load karo
             conn = get_db_connection()
             cursor = conn.cursor()
-            cursor.execute("SELECT title, url, price FROM watchlist")
+            # Database se saare saved watchlist items nikalain
+            cursor.execute("SELECT id, title, url, price FROM watchlist ORDER BY timestamp DESC")
             rows = cursor.fetchall()
             conn.close()
-
-            if rows:
-                for row in rows:
-                    title, url, old_price_str = row
-                    if url:
-                        try:
-                            from deal_sources import fetch_product_price, get_offer_price
-                            price_val = await asyncio.to_thread(fetch_product_price, url)
-                            if not price_val:
-                                price_val = await asyncio.to_thread(get_offer_price, "", url)
-                            
-                            if isinstance(price_val, (int, float)) and price_val > 0:
-                                price_display = f"₹{price_val:,.0f}"
-                                
-                                # Purane price ko numeric mein convert karke compare karo
-                                old_numeric = float(re.sub(r'[^\d.]', '', str(old_price_str))) if old_price_str and old_price_str not in ["Checking...", "N/A", "-"] else None
-                                
-                                # Agar purana price mil gaya hai aur naya price usse kam hai, toh alert bhejo!
-                                if old_numeric and price_val < old_numeric:
-                                    drop_amount = old_numeric - price_val
-                                    alert_msg = (
-                                        f"📉 **WATCHLIST PRICE DROP ALERT!**\n\n"
-                                        f"📦 {title}\n"
-                                        f"💰 Old Price: ₹{old_numeric:,.0f}\n"
-                                        f"🔥 New Price: {price_display} (Saved ₹{drop_amount:,.0f}!)\n"
-                                        f"🔗 {url}"
-                                    )
-                                    if DESTINATION:
-                                        try:
-                                            await client.send_message(DESTINATION, alert_msg)
-                                        except Exception:
-                                            pass
-                                    await tracker_log(f"Price dropped for watched item: {title} to {price_display}")
-
-                                # Database mein naya price update kar do
-                                save_watchlist_item_to_db(title, url, price_display)
-                        except Exception as e:
-                            print(f"Error checking watchlist item {url}: {e}")
-                            
-                    await asyncio.sleep(5) # Har item ke beech chhota gap
-            await tracker_log("Checked and updated all database watchlist items successfully.")
+            
+            updated_watched_list = []
+            
+            for row in rows:
+                item_id, title, url, old_price = row
+                
+                # Yahan aap apna scraping/price checking logic lagayein jo URL se live price nikal sake
+                # Example ke taur par, maan lijiye live price fetch hoti hai:
+                current_price = fetch_live_price(url) # Aapka scraping function
+                
+                if not current_price:
+                    current_price = old_price # Fallback agar scrape na ho paye
+                
+                # Database mein price update karein
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute("UPDATE watchlist SET price = %s, timestamp = %s WHERE id = %s", 
+                               (current_price, int(time.time()), item_id))
+                conn.commit()
+                conn.close()
+                
+                # Cache list mein add karein taaki frontend par sabhi dikhein
+                updated_watched_list.append({
+                    "title": title[:60] if title else "Watched Item",
+                    "price": current_price,
+                    "url": url,
+                    "time": datetime.now(IST).strftime("%H:%M:%S")
+                })
+                
+                add_tracker_log(f"Checked price for '{title[:30]}': {current_price}")
+            
+            # Global cache update karein taaki /stats sabhi ko bhej sake
+            watched_items_cache = updated_watched_list
+            
         except Exception as e:
-            await tracker_log(f"Tracker error: {str(e)}", error=True)
-        
-        await asyncio.sleep(60) # Har 1 minute mein poori watchlist check hogi
+            add_tracker_log(f"Error in price tracker worker: {str(e)}", is_error=True)
+            
+        # Har 5 ya 10 minutes baad saare items ko dobara check karega
+        time.sleep(300) 
+
+
 
 async def process_message(event):
     chat = await event.get_chat()
