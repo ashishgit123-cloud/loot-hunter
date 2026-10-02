@@ -1,5 +1,27 @@
 [phases.setup]
-nixPkgs = ["python3", "chromium", "nss", "freetype", "harfbuzz", "ca-certificates", "ttf-dejavu"]
+nixPkgs = [
+    "python3",
+    "chromium",
+    "nss",
+    "nspr",
+    "atk",
+    "cups",
+    "dbus",
+    "libdrm",
+    "libxcomposite",
+    "libxdamage",
+    "libxfixes",
+    "libxrandr",
+    "mesa",
+    "pango",
+    "alsa-lib"
+]
 
 [phases.build]
-cmds = ["pip install -r requirements.txt", "playwright install chromium"]
+cmds = [
+    "pip install -r requirements.txt",
+    "playwright install chromium"
+]
+
+[start]
+cmd = "python loot_listener.py"

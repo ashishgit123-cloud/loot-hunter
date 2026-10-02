@@ -18,13 +18,13 @@ HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/140.0 Safari/537.36"
+        "Chrome/122.0.0.0 Safari/537.36"
     ),
     "Accept": (
         "text/html,application/xhtml+xml,application/xml;"
         "q=0.9,image/avif,image/webp,*/*;q=0.8"
     ),
-    "Accept-Language": "en-IN,en;q=0.9",
+    "Accept-Language": "en-US,en;q=0.9",
 }
 
 AMAZON = {
@@ -345,44 +345,66 @@ def extract_page_price(html: str) -> Optional[float]:
 def fetch_product_price(url: str) -> Optional[float]:
     try:
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             "Accept-Language": "en-US,en;q=0.9",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
         }
-        resp = requests.get(url, headers=headers, timeout=8)
+        resp = requests.get(url, headers=headers, timeout=10)
         if resp.status_code != 200:
             return None
             
         soup = BeautifulSoup(resp.text, 'html.parser')
-        
-        # 1️⃣ Agar link Amazon ka hai, toh uske specific price tags dhoondo
-        if "amazon." in url.lower():
-            # Amazon ka current price aksar is selector mein hota hai
-            price_elem = soup.select_one('.a-price .a-offscreen')
-            if price_elem:
-                price_text = price_elem.get_text()
-                cleaned = re.sub(r'[^\d.]', '', price_text)
-                if cleaned:
-                    return float(cleaned)
-            
-            # Fallback: Agar class na mile toh corePrice div se try karo
-            core_price = soup.select_main('#corePrice_desktop_feature_div, #corePriceDisplay_desktop_feature_div')
-            if core_price:
-                text_content = core_price.get_text()
-                # Yahan se ₹ ke baad ka pehla valid number nikalo jo MRP na ho
-                matches = re.findall(r'₹\s*([\d,]+\.?\d*)', text_content)
-                if matches:
-                    # Pehla price aksar selling price hota hai agar sahi order ho
-                    clean_val = float(matches[0].replace(',', ''))
-                    return clean_val
+        price_val = 0.0
 
-        # 2️⃣ Flipkart ya doosri sites ke liye general selector
-        price_elem = soup.select_one('div._30jeq3, div._1vC4OE, span.a-price .a-offscreen')
-        if price_elem:
-            cleaned = re.sub(r'[^\d.]', '', price_elem.get_text())
-            if cleaned:
-                return float(cleaned)
-                
+        # 1. Amazon Specific Selectors
+        if "amazon" in url.lower():
+            amazon_selectors = [
+                "span.a-price-whole",
+                "span.a-offscreen",
+                "#priceblock_ourprice",
+                "#priceblock_dealprice",
+                ".apexPriceToPay span.a-offscreen"
+            ]
+            for sel in amazon_selectors:
+                element = soup.select_one(sel)
+                if element:
+                    price_text = element.get_text().strip()
+                    clean_price_val = clean_price(price_text)
+                    if clean_price_val and clean_price_val > 50:
+                        price_val = clean_price_val
+                        break
+
+        # 2. Flipkart Specific Selectors
+        elif "flipkart" in url.lower():
+            flipkart_selectors = [
+                "div._30jeq3",
+                "div._25b18c div._30jeq3",
+                "div.Nx9bqj",
+                "div._1vC4OE"
+            ]
+            for sel in flipkart_selectors:
+                element = soup.select_one(sel)
+                if element:
+                    price_text = element.get_text().strip()
+                    clean_price_val = clean_price(price_text)
+                    if clean_price_val and clean_price_val > 50:
+                        price_val = clean_price_val
+                        break
+
+        # 3. Fallback to OpenGraph / Meta tags or general page price extractor if specific selectors miss
+        if price_val == 0.0:
+            meta_price = soup.find('meta', property='product:price:amount') or soup.find('meta', attrs={'name': 'twitter:data2'})
+            if meta_price and meta_price.get('content'):
+                try:
+                    price_val = float(meta_price['content'].strip())
+                except ValueError:
+                    pass
+
+        if price_val == 0.0:
+            price_val = extract_page_price(resp.text) or 0.0
+
+        return price_val if price_val > 50 else None
+
     except Exception as e:
         print(f"Fetch price error for {url}: {e}")
         
