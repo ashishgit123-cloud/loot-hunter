@@ -9,6 +9,7 @@ import logging
 import json
 import io
 import csv
+from playwright.async_api import async_playwright
 from collections import OrderedDict, deque
 from typing import Optional
 from datetime import datetime, timezone, timedelta
@@ -561,6 +562,57 @@ async def send_result(result, source, title, price, final_url, min_price_str, av
         except Exception:
             pass
 
+async def trigger_add_to_cart(url: str, source_site: str):
+    """
+    Target price hit hone par product ko seedha Cart mein add karega.
+    """
+    add_tracker_log(f"🛒 Starting 'Add to Cart' Automation for: {url}")
+    try:
+        async with async_playwright() as p:
+            user_data_dir = "./chrome_profile" 
+            
+            add_tracker_log("🌐 Launching browser...")
+            browser = await p.chromium.launch_persistent_context(
+                user_data_dir=user_data_dir,
+                headless=False, 
+                args=["--disable-blink-features=AutomationControlled"]
+            )
+            
+            page = await browser.new_page()
+            add_tracker_log(f"🔗 Navigating to product page...")
+            await page.goto(url, timeout=60000)
+            
+            # --- 1. FLIPKART ADD TO CART ---
+            if "flipkart" in url.lower():
+                try:
+                    add_tracker_log("🔍 Flipkart: Looking for 'Add to Cart' button...")
+                    # Text ya class ke zariye Add to Cart dhoondna
+                    cart_button = await page.wait_for_selector("button:has-text('Add to Cart'), button:has-text('ADD TO CART'), button._2KpZ6l._3AWRsL._3vhnxf", timeout=8000)
+                    if cart_button:
+                        await cart_button.click()
+                        add_tracker_log("✅ Flipkart: Successfully clicked 'Add to Cart'!")
+                except Exception as e:
+                    add_tracker_log(f"⚠️ Flipkart 'Add to Cart' error: {e}", is_error=True)
+
+            # --- 2. AMAZON ADD TO CART ---
+            elif "amazon" in url.lower():
+                try:
+                    add_tracker_log("🔍 Amazon: Looking for 'Add to Cart' button...")
+                    cart_btn = await page.wait_for_selector("#add-to-cart-button, input#add-to-cart-button, input[name='submit.add-to-cart']", timeout=8000)
+                    if cart_btn:
+                        await cart_btn.click()
+                        add_tracker_log("✅ Amazon: Successfully clicked 'Add to Cart'!")
+                except Exception as e:
+                    add_tracker_log(f"⚠️ Amazon 'Add to Cart' error: {e}", is_error=True)
+            
+            # Cart me add hone ke baad 10 second ruk kar browser band kar dena
+            add_tracker_log("⏳ Product successfully processed. Closing browser in 10 seconds...")
+            await asyncio.sleep(10)
+            await browser.close()
+            add_tracker_log("🔒 Browser session closed safely.")
+            
+    except Exception as e:
+        add_tracker_log(f"❌ Add to Cart automation error: {e}", is_error=True)
 def fetch_live_price(url: str) -> str:
     try:
         headers = {
@@ -636,43 +688,71 @@ def price_tracker_worker():
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
-            cursor.execute("SELECT title, url, price FROM watchlist ORDER BY timestamp DESC")
+            cursor.execute("SELECT title, url, price, target_price FROM watchlist ORDER BY timestamp DESC")
             rows = cursor.fetchall()
             conn.close()
             
             updated_watched_list = []
             
             for row in rows:
-                title, url, old_price = row
+                title, url, old_price, target_price = row
+                target_price = target_price if target_price is not None else 0.0
                 
-                current_price = fetch_live_price(url)
-                if not current_price:
-                    current_price = old_price
+                price_val = fetch_live_price(url)
+                current_price_str = f"₹{price_val:,.0f}" if price_val else old_price
                 
+                # Database update
                 conn = get_db_connection()
                 cursor = conn.cursor()
                 cursor.execute("""
                     UPDATE watchlist SET price = %s, timestamp = %s WHERE url = %s
-                """, (str(current_price), time.time(), url))
+                """, (str(current_price_str), time.time(), url))
                 conn.commit()
                 conn.close()
                 
+                # ==========================================
+                # 🛑 YAHAN DALNA HAI YE WALA CHECK BLOCK:
+                # ==========================================
+                if price_val and target_price > 0 and price_val <= target_price:
+                    alert_msg = (
+                        f"🚨🎯 **TARGET PRICE REACHED! ADDING TO CART!** 🎯🚨\n\n"
+                        f"📦 **{title}**\n"
+                        f"💰 Current Price: ₹{price_val:,.0f}\n"
+                        f"🎯 Target Price: ₹{target_price:,.0f}\n"
+                        f"🔗 {url}"
+                    )
+                    
+                    # Telegram Alert + Add to Cart Trigger
+                    if DESTINATION:
+                        try:
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            loop.run_until_complete(client.send_message(DESTINATION, alert_msg))
+                            # Yeh function product ko cart me daal dega
+                            loop.run_until_complete(trigger_add_to_cart(url, "e-commerce"))
+                            loop.close()
+                        except Exception as ex:
+                            add_tracker_log(f"Failed to run add-to-cart automation: {ex}", is_error=True)
+                # ==========================================
+
                 updated_watched_list.append({
                     "title": title[:60] if title else "Watched Item",
-                    "price": str(current_price),
+                    "price": str(current_price_str),
+                    "target_price": target_price,
                     "url": url,
                     "time": datetime.now(IST).strftime("%H:%M:%S")
                 })
                 
-                add_tracker_log(f"Checked price for '{title[:30]}': {current_price}")
+                add_tracker_log(f"Checked '{title[:25]}': {current_price_str} (Target: ₹{target_price:,.0f})")
             
             WATCHED_ITEMS = updated_watched_list
             
         except Exception as e:
             add_tracker_log(f"Error in price tracker worker: {str(e)}", is_error=True)
             
-        time.sleep(300) 
+        time.sleep(300)
 
+        
 async def process_message(event):
     chat = await event.get_chat()
     chat_identifier = getattr(chat, "username", None) or str(chat.id)
