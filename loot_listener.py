@@ -28,7 +28,7 @@ import psycopg2
 werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.ERROR)
 
-VERSION = "6.9.4"
+VERSION = "6.9.5"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -565,14 +565,13 @@ def fetch_live_price(url: str) -> str:
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept-Language": "en-US,en;q=0.9,hi;q=0.8",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+            "Accept-Language": "en-US,en;q=0.9,hi;q=0.8"
         }
         resp = requests.get(url, headers=headers, timeout=8)
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, 'html.parser')
             
-            # 1. Sirf Amazon ke liye special aur clean .a-offscreen selector
+            # 1. Amazon ke liye .a-offscreen (exact tax-free final price)
             if "amazon" in url.lower():
                 offscreen_elem = soup.select_one(".a-price .a-offscreen")
                 if offscreen_elem:
@@ -583,7 +582,7 @@ def fetch_live_price(url: str) -> str:
                         if val > 0:
                             return f"₹{val:,.0f}"
             
-            # 2. Flipkart aur baaki sabhi sites ke liye wahi purana badiya regex logic
+            # 2. Flipkart aur baaki sabhi sites ke liye purana regex logic (Lowest price context scanning)
             text_content = soup.get_text()
             prices = re.findall(r'(?:₹|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)', text_content, re.IGNORECASE)
             if prices:
@@ -652,7 +651,7 @@ async def process_message(event):
     print(f"📥 Message received from chat: {chat_identifier}")
 
     if not channel_allowed(chat):
-        print(f"⚠️ Channel {chat_identifier} is not in WATCH_CHANNELS filter list!")
+        print(f"⚠️️ Channel {chat_identifier} is not in WATCH_CHANNELS filter list!")
         return
 
     text = event.raw_text or ""
