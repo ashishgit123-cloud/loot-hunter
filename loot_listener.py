@@ -28,7 +28,7 @@ import psycopg2
 werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.ERROR)
 
-VERSION = "6.9.5"
+VERSION = "6.9.7"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -488,7 +488,7 @@ def get_smart_title(text: str, url: Optional[str] = None) -> str:
     return title
 
 async def log(msg: str, error: bool = False, send_to_telegram: bool = True):
-    prefix = "❌" if error else "ℹ️"
+    prefix = "❌" if error else "ℹ️️"
     timestamp = datetime.now(IST).strftime("%H:%M:%S")
     line = f"[{timestamp}] {prefix} {msg}"
     print(line)
@@ -571,7 +571,34 @@ def fetch_live_price(url: str) -> str:
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, 'html.parser')
             
-            # 1. Amazon ke liye .a-offscreen (exact tax-free final price)
+            # 1. JSON-LD Schema data check karein (Flipkart & Amazon dono ke liye sabse accurate)
+            for script in soup.find_all('script', type='application/ld+json'):
+                try:
+                    data = json.loads(script.string)
+                    if isinstance(data, list):
+                        data = data[0]
+                    if isinstance(data, dict):
+                        offers = data.get('offers')
+                        if isinstance(offers, dict):
+                            p = offers.get('price') or offers.get('lowPrice')
+                            if p:
+                                val = float(str(p).replace(',', ''))
+                                if val > 0:
+                                    return f"₹{val:,.0f}"
+                except:
+                    pass
+
+            # 2. Meta tags check karein
+            price_meta = soup.find('meta', property='product:price:amount') or soup.find('meta', property='og:price:amount')
+            if price_meta and price_meta.get('content'):
+                try:
+                    val = float(price_meta['content'])
+                    if val > 0:
+                        return f"₹{val:,.0f}"
+                except:
+                    pass
+
+            # 3. Amazon ke liye .a-offscreen
             if "amazon" in url.lower():
                 offscreen_elem = soup.select_one(".a-price .a-offscreen")
                 if offscreen_elem:
@@ -582,7 +609,7 @@ def fetch_live_price(url: str) -> str:
                         if val > 0:
                             return f"₹{val:,.0f}"
             
-            # 2. Flipkart aur baaki sabhi sites ke liye purana regex logic (Lowest price context scanning)
+            # 4. Flipkart aur baaki sites ke liye text regex (chote numbers/delivery charges jaise < 50 ko ignore karke)
             text_content = soup.get_text()
             prices = re.findall(r'(?:₹|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)', text_content, re.IGNORECASE)
             if prices:
@@ -590,7 +617,8 @@ def fetch_live_price(url: str) -> str:
                 for p in prices:
                     try:
                         val = float(p.replace(',', ''))
-                        if val > 0:
+                        # Delivery charges ya chote values (< 50) filter out karne ke liye
+                        if val > 50:
                             cleaned_prices.append(val)
                     except:
                         continue
@@ -651,13 +679,26 @@ async def process_message(event):
     print(f"📥 Message received from chat: {chat_identifier}")
 
     if not channel_allowed(chat):
-        print(f"⚠️️ Channel {chat_identifier} is not in WATCH_CHANNELS filter list!")
+        print(f"⚠ Channel {chat_identifier} is not in WATCH_CHANNELS filter list!")
         return
 
     text = event.raw_text or ""
     found = urls(text)
     if not found:
         print(f"ℹ️ Message ignored (No URL found): {text[:50]}...")
+        return
+
+    text_lower = text.lower()
+    promo_keywords = [
+        "great indian festival", "big billion days", "sale is live", 
+        "sale starts", "upcoming sale", "loot sale live", "festival store", "blockbuster deals live"
+    ]
+    
+    first_url = found[0]
+    is_product_url = bool(re.search(r'(/dp/|/gp/|/p/|\?pid=)', first_url, re.I))
+    
+    if any(pk in text_lower for pk in promo_keywords) and not is_product_url:
+        print(f"ℹ Skipped promotional event banner: {text[:50]}...")
         return
 
     source = f"@{chat.username}" if getattr(chat, "username", None) else str(chat.id)
@@ -667,7 +708,6 @@ async def process_message(event):
 
     from deal_sources import get_offer_price, resolve_url, canonical_url
     
-    first_url = found[0]
     deal_url = first_url
     try:
         resolved_url = await asyncio.to_thread(resolve_url, first_url)
@@ -677,7 +717,13 @@ async def process_message(event):
         deal_url = first_url
 
     title = get_smart_title(text, deal_url)
-    if not title or title == "Unknown Product":
+    
+    if (not title 
+        or title == "Unknown Product" 
+        or "amazon.in" in title.lower() 
+        or "online shopping site" in title.lower()
+        or "flipkart" == title.lower().strip()):
+        print(f"ℹ️ Skipped generic/invalid title or homepage: {title}")
         return
 
     price = await asyncio.to_thread(get_offer_price, text, deal_url)
