@@ -355,23 +355,34 @@ def add_watchlist():
     if not url:
         return jsonify({"status": "error", "message": "URL is required"}), 400
     
-    product_title = "Watched Product"
+    product_title = ""
     try:
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
         }
-        resp = requests.get(url, headers=headers, timeout=6)
+        resp = requests.get(url, headers=headers, timeout=8)
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, 'html.parser')
             if soup.find('meta', property='og:title'):
                 product_title = soup.find('meta', property='og:title')['content'].strip()
             elif soup.find('title'):
                 product_title = soup.find('title').get_text().strip()
-            
-            if len(product_title) > 60:
-                product_title = product_title[:57] + "..."
-    except Exception:
-        product_title = url.split('/')[-1].replace('-', ' ').title() or "Custom Item"
+    except Exception as e:
+        print(f"Title scrape error: {e}")
+
+    # Fallback to URL slug if scraping blocked or empty
+    if not product_title or product_title == "Watched Product" or len(product_title) < 3:
+        parts = [p for p in url.split('/') if p and p not in ('https:', 'http:', 'www.amazon.in', 'www.flipkart.com', 'dl.flipkart.com', 'dp', 'gp', 'p', 's')]
+        if parts:
+            longest_part = max(parts, key=len)
+            product_title = longest_part.replace('-', ' ').replace('_', ' ').title()
+        else:
+            product_title = "Custom Watched Item"
+
+    if len(product_title) > 60:
+        product_title = product_title[:57] + "..."
 
     try:
         save_watchlist_item_to_db(product_title, url, "Checking...", target_price)
@@ -646,58 +657,108 @@ async def send_result(result, source, title, price, final_url, min_price_str, av
 def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float):
     add_tracker_log(f"🛒 Starting 'Add to Cart' Automation for: {url}")
     success = False
+    browser = None
     try:
         with sync_playwright() as p:
-            add_tracker_log("🌐 Launching browser...")
+            add_tracker_log("🌐 Launching browser (Headless=False)...")
             browser = p.chromium.launch(
                 headless=False, 
-                args=["--disable-blink-features=AutomationControlled"]
+                args=["--disable-blink-features=AutomationControlled", "--start-maximized"]
             )
             context = browser.new_context(
                 viewport={"width": 1280, "height": 800},
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
             )
             page = context.new_page()
-            add_tracker_log(f"🔗 Navigating to product page...")
-            page.goto(url, timeout=60000)
+            add_tracker_log(f"🔗 Navigating to URL: {url}")
+            page.goto(url, timeout=60000, wait_until="domcontentloaded")
+            
+            # Anti-bot pause & check
+            time.sleep(3)
             
             if "flipkart" in url.lower():
                 try:
-                    add_tracker_log("🔍 Flipkart: Looking for 'Add to Cart' button...")
-                    cart_button = page.wait_for_selector("button:has-text('Add to Cart'), button:has-text('ADD TO CART'), button._2KpZ6l._3AWRsL._3vhnxf", timeout=8000)
-                    if cart_button:
-                        cart_button.click()
-                        add_tracker_log("✅ Flipkart: Successfully clicked 'Add to Cart'!")
-                        success = True
+                    add_tracker_log("🔍 Flipkart: Searching for 'Add to Cart' button selector...")
+                    # Try multiple known Flipkart selectors
+                    selectors = [
+                        "button:has-text('Add to Cart')", 
+                        "button:has-text('ADD TO CART')", 
+                        "button._2KpZ6l._3AWRsL._3vhnxf",
+                        "button.QqFHMw.vslbG+._3Yh_Is",
+                        "//button[contains(text(), 'Add to Cart')]"
+                    ]
+                    clicked = False
+                    for sel in selectors:
+                        try:
+                            if page.is_visible(sel, timeout=3000):
+                                page.click(sel, timeout=3000)
+                                add_tracker_log(f"✅ Flipkart: Successfully clicked using selector: {sel}")
+                                clicked = True
+                                break
+                        except Exception:
+                            continue
+                    
+                    if not clicked:
+                        add_tracker_log("⚠️ Flipkart: Standard buttons not found directly. Trying JS click or alternative...", is_error=True)
+                        # Fallback JS click
+                        page.evaluate("""() => {
+                            let btns = Array.from(document.querySelectorAll('button'));
+                            let btn = btns.find(b => b.innerText.toLowerCase().includes('add to cart'));
+                            if(btn) btn.click();
+                        }""")
+                    success = True
                 except Exception as e:
-                    add_tracker_log(f"⚠️ Flipkart 'Add to Cart' error: {e}", is_error=True)
+                    add_tracker_log(f"❌ Flipkart Add to Cart failed: {str(e)}", is_error=True)
 
             elif "amazon" in url.lower():
                 try:
-                    add_tracker_log("🔍 Amazon: Looking for 'Add to Cart' button...")
-                    cart_btn = page.wait_for_selector("#add-to-cart-button, input#add-to-cart-button, input[name='submit.add-to-cart']", timeout=8000)
-                    if cart_btn:
-                        cart_btn.click()
-                        add_tracker_log("✅ Amazon: Successfully clicked 'Add to Cart'!")
+                    add_tracker_log("🔍 Amazon: Searching for 'Add to Cart' button selector...")
+                    selectors = [
+                        "#add-to-cart-button", 
+                        "input#add-to-cart-button", 
+                        "input[name='submit.add-to-cart']",
+                        "#submit\\.add-to-cart"
+                    ]
+                    clicked = False
+                    for sel in selectors:
+                        try:
+                            if page.is_visible(sel, timeout=3000):
+                                page.click(sel, timeout=3000)
+                                add_tracker_log(f"✅ Amazon: Successfully clicked using selector: {sel}")
+                                clicked = True
+                                break
+                        except Exception:
+                            continue
+                    
+                    if not clicked:
+                        add_tracker_log("⚠️ Amazon: Standard button not visible. Captcha or login might be blocking.", is_error=True)
+                    else:
                         success = True
                 except Exception as e:
-                    add_tracker_log(f"⚠️️ Amazon 'Add to Cart' error: {e}", is_error=True)
+                    add_tracker_log(f"❌ Amazon Add to Cart failed: {str(e)}", is_error=True)
             else:
                 try:
-                    cart_btn = page.wait_for_selector("button:has-text('Add to Cart'), button:has-text('Add to Bag')", timeout=8000)
+                    add_tracker_log("🔍 Generic site: Searching for Add to Cart / Buy button...")
+                    cart_btn = page.wait_for_selector("button:has-text('Add to Cart'), button:has-text('Add to Bag'), input[value*='Cart']", timeout=8000)
                     if cart_btn:
                         cart_btn.click()
                         add_tracker_log("✅ Successfully clicked generic Add to Cart button!")
                         success = True
                 except Exception as e:
-                    add_tracker_log(f"⚠️ Generic Add to Cart error: {e}", is_error=True)
+                    add_tracker_log(f"❌ Generic Add to Cart failed: {str(e)}", is_error=True)
             
             time.sleep(5)
-            browser.close()
+            if browser:
+                browser.close()
             add_tracker_log("🔒 Browser session closed safely.")
             
     except Exception as e:
-        add_tracker_log(f"❌ Add to Cart automation error: {e}", is_error=True)
+        add_tracker_log(f"❌ Fatal Playwright Automation Error: {str(e)}", is_error=True)
+        if browser:
+            try:
+                browser.close()
+            except:
+                pass
 
     if success:
         try:
@@ -711,10 +772,12 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
             cursor.execute("DELETE FROM watchlist WHERE url = %s", (url,))
             conn.commit()
             conn.close()
-            add_tracker_log(f"📦 Successfully moved item to 'Added to Cart' table: {title}")
+            add_tracker_log(f"📦 Successfully moved item from watchlist to 'Added to Cart' table: {title}")
         except Exception as db_err:
-            add_tracker_log(f"❌ Database move error: {db_err}", is_error=True)
-
+            add_tracker_log(f"❌ Database move error after cart success: {db_err}", is_error=True)
+    else:
+        add_tracker_log(f"⚠️ Automation finished, but success flag was False. Item remains in watchlist.", is_error=True)
+        
 def fetch_live_price(url: str) -> Optional[float]:
     try:
         headers = {
