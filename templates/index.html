@@ -54,45 +54,6 @@
             color: var(--accent-blue);
         }
 
-        /* Search Box in Header */
-        .search-box {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-            flex: 1;
-            max-width: 350px;
-            min-width: 220px;
-        }
-
-        .search-input {
-            background: var(--bg-color);
-            border: 1px solid var(--border-color);
-            padding: 6px 12px;
-            border-radius: 6px;
-            color: var(--text-main);
-            font-size: 0.85rem;
-            width: 100%;
-            outline: none;
-        }
-
-        .search-input:focus {
-            border-color: var(--accent-blue);
-        }
-
-        .search-btn {
-            background: var(--accent-blue);
-            color: #090d16;
-            border: none;
-            padding: 6px 12px;
-            border-radius: 6px;
-            font-weight: bold;
-            font-size: 0.85rem;
-            cursor: pointer;
-            white-space: nowrap;
-        }
-
-        .search-btn:hover { opacity: 0.9; }
-
         .header-right {
             display: flex;
             align-items: center;
@@ -165,6 +126,95 @@
             flex-grow: 1;
         }
 
+        /* AI Chatbot Section Styling */
+        .chat-container {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            margin-bottom: 5px;
+        }
+
+        .chat-header {
+            padding: 10px 15px;
+            background: rgba(255,255,255,0.02);
+            border-bottom: 1px solid var(--border-color);
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--accent-blue);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .chat-box {
+            height: 180px;
+            overflow-y: auto;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            background: var(--bg-color);
+        }
+
+        .chat-msg {
+            padding: 8px 12px;
+            border-radius: 8px;
+            max-width: 85%;
+            font-size: 0.8rem;
+            line-height: 1.4;
+            word-wrap: break-word;
+        }
+
+        .bot-msg {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            align-self: flex-start;
+            color: var(--text-main);
+        }
+
+        .user-msg {
+            background: var(--accent-blue);
+            color: #090d16;
+            font-weight: 500;
+            align-self: flex-end;
+        }
+
+        .chat-input-area {
+            display: flex;
+            padding: 10px;
+            background: rgba(255,255,255,0.01);
+            border-top: 1px solid var(--border-color);
+            gap: 8px;
+        }
+
+        .chat-input {
+            flex: 1;
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            padding: 8px 12px;
+            border-radius: 6px;
+            color: var(--text-main);
+            font-size: 0.85rem;
+            outline: none;
+        }
+        .chat-input:focus { border-color: var(--accent-blue); }
+
+        .chat-send-btn {
+            background: var(--accent-blue);
+            color: #090d16;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 0.85rem;
+            cursor: pointer;
+        }
+        .chat-send-btn:hover { opacity: 0.9; }
+
         .top-section {
             display: grid;
             grid-template-columns: 240px 1fr 1fr 1fr;
@@ -235,17 +285,6 @@
             display: flex;
             align-items: center;
             gap: 6px;
-        }
-
-        .ai-banner {
-            background: rgba(56, 189, 248, 0.08);
-            border: 1px solid rgba(56, 189, 248, 0.2);
-            padding: 10px 15px;
-            font-size: 0.8rem;
-            color: var(--accent-blue);
-            display: none;
-            border-bottom: 1px solid var(--border-color);
-            line-height: 1.4;
         }
 
         .feed-list {
@@ -364,7 +403,6 @@
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
 
-        /* Responsive Media Queries for Mobile/Tablets */
         @media (max-width: 1024px) {
             .top-section {
                 grid-template-columns: 1fr;
@@ -380,12 +418,6 @@
     <header>
         <div class="brand">🔥 Loot Deal Command Center</div>
         
-        <!-- Search DB Input -->
-        <div class="search-box">
-            <input type="text" id="searchInput" class="search-input" placeholder="Ask AI or Search DB..." onkeypress="handleSearchKey(event)">
-            <button class="search-btn" onclick="searchDatabase()">Search</button>
-        </div>
-
         <div class="header-right">
             <button class="action-btn" onclick="promptAddWatchlist()">+ Add Watchlist</button>
             <a href="/export" class="export-btn">📥 Export CSV</a>
@@ -398,6 +430,22 @@
 
     <div class="dashboard-container">
         
+        <!-- AI Chatbot Search Bar Widget -->
+        <div class="chat-container">
+            <div class="chat-header">
+                💬 AI Deal Assistant Chatbot
+            </div>
+            <div class="chat-box" id="chatBox">
+                <div class="chat-msg bot-msg">
+                    Hello! Main aapka AI Assistant hoon. Aap mujhse kisi bhi product ya deal ke baare mein pooch sakte hain (jaise: "phone under 15000").
+                </div>
+            </div>
+            <div class="chat-input-area">
+                <input type="text" id="chatInput" class="chat-input" placeholder="Ask AI anything about past deals..." onkeypress="handleChatKey(event)">
+                <button class="chat-send-btn" onclick="sendChatMessage()">Send</button>
+            </div>
+        </div>
+
         <div class="top-section">
             <!-- Metrics Column -->
             <div class="metrics-col">
@@ -435,9 +483,6 @@
                 <div class="feed-header">
                     <h2 id="feedTitle">🔍 Scanned Stream</h2>
                     <span style="font-size: 0.68rem; color: var(--text-muted);" id="scanCountBadge">0 items</span>
-                </div>
-                <div id="aiBanner" class="ai-banner">
-                    <strong>🧠 AI Assistant:</strong> <span id="aiAnswerText"></span>
                 </div>
                 <div class="feed-list" id="scannedList">
                     <div class="deal-card scanned">
@@ -494,8 +539,7 @@
     </div>
 
     <script>
-        let isSearching = false;
-        let activeLogMode = 'system'; // 'system' or 'tracker'
+        let activeLogMode = 'system';
         let cachedData = null;
 
         function switchLogTab(mode) {
@@ -532,8 +576,8 @@
                 document.getElementById('uptimeVal').innerText = cachedData.uptime || '0s';
                 document.getElementById('dedupVal').innerText = cachedData.dedup_size || 0;
 
-                // Render Scanned Stream if not actively searching
-                if (!isSearching && cachedData.recent_deals) {
+                // Render Scanned Stream
+                if (cachedData.recent_deals) {
                     document.getElementById('scanCountBadge').innerText = `${cachedData.recent_deals.length} items`;
                     let container = document.getElementById('scannedList');
                     if (cachedData.recent_deals.length > 0) {
@@ -633,64 +677,60 @@
             }
         }
 
-        async function searchDatabase() {
-            let query = document.getElementById('searchInput').value.trim();
-            if (!query) {
-                isSearching = false;
-                document.getElementById('feedTitle').innerText = "🔍 Scanned Stream";
-                document.getElementById('aiBanner').style.display = "none";
-                fetchStats();
-                return;
-            }
+        // Chatbot Search Handler
+        async function sendChatMessage() {
+            let inputField = document.getElementById('chatInput');
+            let query = inputField.value.trim();
+            if (!query) return;
 
-            isSearching = true;
-            document.getElementById('feedTitle').innerText = `🔎 AI Search: "${query}"`;
-            let container = document.getElementById('scannedList');
-            container.innerHTML = `<div class="deal-card scanned"><div class="deal-title">Querying AI & Database...</div></div>`;
+            let chatBox = document.getElementById('chatBox');
+            
+            // Add User Message
+            chatBox.innerHTML += `<div class="chat-msg user-msg">${escapeHtml(query)}</div>`;
+            inputField.value = '';
+            chatBox.scrollTop = chatBox.scrollHeight;
+
+            // Loading state
+            let loadId = 'loading-' + Date.now();
+            chatBox.innerHTML += `<div id="${loadId}" class="chat-msg bot-msg">Searching database & analyzing with AI...</div>`;
+            chatBox.scrollTop = chatBox.scrollHeight;
 
             try {
                 let res = await fetch(`/search?q=${encodeURIComponent(query)}`);
                 let data = await res.json();
                 
-                let banner = document.getElementById('aiBanner');
-                if (data.answer) {
-                    document.getElementById('aiAnswerText').innerText = data.answer;
-                    banner.style.display = "block";
-                } else {
-                    banner.style.display = "none";
-                }
+                document.getElementById(loadId).remove();
 
-                let results = data.deals || [];
-                document.getElementById('scanCountBadge').innerText = `${results.length} found`;
+                let botAnswer = data.answer || "No details found.";
+                let dealsHtml = "";
                 
-                if (results.length > 0) {
-                    let html = '';
-                    results.forEach(deal => {
-                        html += `
-                            <div class="deal-card scanned">
-                                <div class="deal-title"><a href="${deal.url}" target="_blank">${deal.title}</a></div>
-                                <div class="deal-details">
-                                    <span>Min: <b style="color:#f8fafc;">${deal.min_price}</b></span>
-                                    <span>Avg: <b style="color:#f8fafc;">${deal.avg_price}</b></span>
-                                </div>
-                                <div class="deal-footer">
-                                    <span class="deal-price">Price: ${deal.price}</span>
-                                    <span>${deal.source} • ${deal.time}</span>
-                                </div>
+                if (data.deals && data.deals.length > 0) {
+                    dealsHtml += "<br><br><b>Matching Deals:</b>";
+                    data.deals.forEach(deal => {
+                        dealsHtml += `
+                            <div style="background: var(--bg-color); border: 1px solid var(--border-color); padding: 6px; border-radius: 6px; margin-top: 5px; font-size: 0.75rem;">
+                                <b>${escapeHtml(deal.title)}</b><br>
+                                Price: <span style="color: var(--accent-green); font-weight: bold;">${deal.price}</span> | Source: ${deal.source}<br>
+                                <a href="${deal.url}" target="_blank" style="color: var(--accent-blue);">View Deal 🔗</a>
                             </div>
                         `;
                     });
-                    container.innerHTML = html;
-                } else {
-                    container.innerHTML = `<div class="deal-card scanned"><div class="deal-title">No matching deals found in database.</div></div>`;
                 }
+
+                chatBox.innerHTML += `<div class="chat-msg bot-msg">${botAnswer}${dealsHtml}</div>`;
             } catch (err) {
-                console.error("Search error:", err);
+                document.getElementById(loadId).remove();
+                chatBox.innerHTML += `<div class="chat-msg bot-msg">Sorry, an error occurred while searching.</div>`;
             }
+            chatBox.scrollTop = chatBox.scrollHeight;
         }
 
-        function handleSearchKey(e) {
-            if (e.key === 'Enter') searchDatabase();
+        function handleChatKey(e) {
+            if (e.key === 'Enter') sendChatMessage();
+        }
+
+        function escapeHtml(text) {
+            return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
         }
 
         setInterval(fetchStats, 3000);

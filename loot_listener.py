@@ -508,27 +508,57 @@ async def price_tracker_worker():
     while True:
         try:
             global WATCHED_ITEMS
-            WATCHED_ITEMS = load_watchlist_from_db()
-            if WATCHED_ITEMS:
-                for item in WATCHED_ITEMS:
-                    url = item.get("url")
-                    title = item.get("title")
+            # Database se current watchlist load karo
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT title, url, price FROM watchlist")
+            rows = cursor.fetchall()
+            conn.close()
+
+            if rows:
+                for row in rows:
+                    title, url, old_price_str = row
                     if url:
                         try:
-                            from deal_sources import fetch_product_price
+                            from deal_sources import fetch_product_price, get_offer_price
                             price_val = await asyncio.to_thread(fetch_product_price, url)
                             if not price_val:
                                 price_val = await asyncio.to_thread(get_offer_price, "", url)
                             
-                            price_display = f"₹{price_val:,.0f}" if isinstance(price_val, (int, float)) else (str(price_val) if price_val else "N/A")
-                            save_watchlist_item_to_db(title, url, price_display)
-                        except Exception:
-                            pass
-                    await tracker_log("Checked and updated all database watchlist items successfully.")
+                            if isinstance(price_val, (int, float)) and price_val > 0:
+                                price_display = f"₹{price_val:,.0f}"
+                                
+                                # Purane price ko numeric mein convert karke compare karo
+                                old_numeric = float(re.sub(r'[^\d.]', '', str(old_price_str))) if old_price_str and old_price_str not in ["Checking...", "N/A", "-"] else None
+                                
+                                # Agar purana price mil gaya hai aur naya price usse kam hai, toh alert bhejo!
+                                if old_numeric and price_val < old_numeric:
+                                    drop_amount = old_numeric - price_val
+                                    alert_msg = (
+                                        f"📉 **WATCHLIST PRICE DROP ALERT!**\n\n"
+                                        f"📦 {title}\n"
+                                        f"💰 Old Price: ₹{old_numeric:,.0f}\n"
+                                        f"🔥 New Price: {price_display} (Saved ₹{drop_amount:,.0f}!)\n"
+                                        f"🔗 {url}"
+                                    )
+                                    if DESTINATION:
+                                        try:
+                                            await client.send_message(DESTINATION, alert_msg)
+                                        except Exception:
+                                            pass
+                                    await tracker_log(f"Price dropped for watched item: {title} to {price_display}")
+
+                                # Database mein naya price update kar do
+                                save_watchlist_item_to_db(title, url, price_display)
+                        except Exception as e:
+                            print(f"Error checking watchlist item {url}: {e}")
+                            
+                    await asyncio.sleep(5) # Har item ke beech chhota gap
+            await tracker_log("Checked and updated all database watchlist items successfully.")
         except Exception as e:
             await tracker_log(f"Tracker error: {str(e)}", error=True)
         
-        await asyncio.sleep(60)
+        await asyncio.sleep(60) # Har 1 minute mein poori watchlist check hogi
 
 async def process_message(event):
     chat = await event.get_chat()
