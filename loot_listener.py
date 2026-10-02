@@ -130,11 +130,13 @@ def load_watchlist_from_db():
         conn.close()
         for row in rows:
             title, url, price, ts = row
+            # Error fixed here: using datetime.fromtimestamp with IST
+            time_str = datetime.fromtimestamp(ts, IST).strftime("%H:%M:%S") if ts else datetime.now(IST).strftime("%H:%M:%S")
             items.append({
                 "title": title,
                 "url": url,
                 "price": price,
-                "time": datetime.now(IST).strftime("%H:%M:%S") if ts else IST.strftime("%H:%M:%S")
+                "time": time_str
             })
     except Exception as e:
         print(f"Error loading watchlist from DB: {e}")
@@ -219,7 +221,7 @@ def search_db():
             deal_obj = {
                 "title": title[:100], "price": price, "min_price": min_price,
                 "avg_price": avg_price, "source": source, "url": url,
-                "time": datetime.now(IST).strftime("%H:%M:%S")
+                "time": datetime.fromtimestamp(timestamp, IST).strftime("%H:%M:%S") if timestamp else datetime.now(IST).strftime("%H:%M:%S")
             }
             matched_deals.append(deal_obj)
             deals_context.append(f"- Title: {title} | Price: {price} | Source: {source} | URL: {url}")
@@ -289,7 +291,7 @@ def export_deals_csv():
             yield "Deal ID,Title,Price,Min Price,Avg Price,Source,URL,Verdict,Time\n"
             for row in rows:
                 deal_id, title, price, min_price, avg_price, source, url, verdict, ts = row
-                time_str = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+                time_str = datetime.fromtimestamp(ts, IST).strftime("%Y-%m-%d %H:%M:%S") if ts else datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
                 safe_title = str(title).replace('"', '""')
                 yield f'"{deal_id}","{safe_title}","{price}","{min_price}","{avg_price}","{source}","{url}","{verdict}","{time_str}"\n'
 
@@ -344,7 +346,7 @@ def load_deals_from_db_on_startup():
                 item = {
                     "title": title[:100], "price": price, "min_price": min_price,
                     "avg_price": avg_price, "source": source, "url": url,
-                    "time": datetime.now(IST).strftime("%H:%M:%S")
+                    "time": datetime.fromtimestamp(timestamp, IST).strftime("%H:%M:%S") if timestamp else datetime.now(IST).strftime("%H:%M:%S")
                 }
                 RECENT_DEALS.append(item)
                 if verdict_val in {Verdict.DEAL.value, Verdict.POSSIBLE_DEAL.value, "DEAL", "POSSIBLE_DEAL"}:
@@ -389,7 +391,6 @@ def title_from(text: str) -> str:
 def get_smart_title(text: str, url: Optional[str] = None) -> str:
     title = title_from(text)
     
-    # Yahan promotional aur generic keywords badha diye hain
     generic_keywords = [
         "off", "discount", "sale", "upto", "flat", 
         "price drop", "lowest price", "loot", "deal", "save", "time to shine"
@@ -404,7 +405,6 @@ def get_smart_title(text: str, url: Optional[str] = None) -> str:
         or any(k in title.lower() for k in generic_keywords)
     )
     
-    # Agar title generic ya promotional text hai, toh URL se actual product name scrape karo
     if is_generic and url:
         try:
             from deal_sources import resolve_url, canonical_url
@@ -434,7 +434,7 @@ def get_smart_title(text: str, url: Optional[str] = None) -> str:
 
 async def log(msg: str, error: bool = False, send_to_telegram: bool = True):
     prefix = "❌" if error else "ℹ️"
-    timestamp = IST.astimezone().strftime("%H:%M:%S")
+    timestamp = datetime.now(IST).strftime("%H:%M:%S")
     line = f"[{timestamp}] {prefix} {msg}"
     print(line)
     global RECENT_LOGS
@@ -447,7 +447,7 @@ async def log(msg: str, error: bool = False, send_to_telegram: bool = True):
 
 async def tracker_log(msg: str, error: bool = False):
     prefix = "❌" if error else "⚡"
-    timestamp = IST.astimezone().strftime("%H:%M:%S")
+    timestamp = datetime.now(IST).strftime("%H:%M:%S")
     line = f"[{timestamp}] {prefix} [Tracker] {msg}"
     print(line)
     global TRACKER_LOGS
@@ -481,7 +481,7 @@ async def send_result(result, source, title, price, final_url, min_price_str, av
     
     posted_item = {
         "title": title[:100], "price": price_display, "min_price": min_price_str,
-        "avg_price": avg_price_str, "source": source, "url": final_url, "time": IST.strftime("%H:%M:%S")
+        "avg_price": avg_price_str, "source": source, "url": final_url, "time": datetime.now(IST).strftime("%H:%M:%S")
     }
     
     if not POSTED_DEALS or POSTED_DEALS[0]["url"] != final_url:
@@ -609,7 +609,7 @@ async def process_message(event):
 
     item = {
         "title": title[:100], "price": price_display, "min_price": db_min_str,
-        "avg_price": db_avg_str, "source": source, "url": deal_url, "time": IST.strftime("%H:%M:%S")
+        "avg_price": db_avg_str, "source": source, "url": deal_url, "time": datetime.now(IST).strftime("%H:%M:%S")
     }
     RECENT_DEALS.appendleft(item)
 
