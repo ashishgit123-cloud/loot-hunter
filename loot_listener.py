@@ -613,7 +613,8 @@ async def trigger_add_to_cart(url: str, source_site: str):
             
     except Exception as e:
         add_tracker_log(f"❌ Add to Cart automation error: {e}", is_error=True)
-def fetch_live_price(url: str) -> str:
+
+def fetch_live_price(url: str) -> Optional[float]:
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -623,7 +624,7 @@ def fetch_live_price(url: str) -> str:
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, 'html.parser')
             
-            # 1. JSON-LD Schema data check karein (Flipkart & Amazon dono ke liye sabse accurate)
+            # 1. JSON-LD Schema data check karein (Return pure float)
             for script in soup.find_all('script', type='application/ld+json'):
                 try:
                     data = json.loads(script.string)
@@ -636,7 +637,7 @@ def fetch_live_price(url: str) -> str:
                             if p:
                                 val = float(str(p).replace(',', ''))
                                 if val > 0:
-                                    return f"₹{val:,.0f}"
+                                    return val
                 except:
                     pass
 
@@ -646,7 +647,7 @@ def fetch_live_price(url: str) -> str:
                 try:
                     val = float(price_meta['content'])
                     if val > 0:
-                        return f"₹{val:,.0f}"
+                        return val
                 except:
                     pass
 
@@ -659,9 +660,9 @@ def fetch_live_price(url: str) -> str:
                     if cleaned:
                         val = float(cleaned)
                         if val > 0:
-                            return f"₹{val:,.0f}"
+                            return val
             
-            # 4. Flipkart aur baaki sites ke liye text regex (chote numbers/delivery charges jaise < 50 ko ignore karke)
+            # 4. Flipkart aur baaki sites ke liye text regex
             text_content = soup.get_text()
             prices = re.findall(r'(?:₹|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)', text_content, re.IGNORECASE)
             if prices:
@@ -669,18 +670,16 @@ def fetch_live_price(url: str) -> str:
                 for p in prices:
                     try:
                         val = float(p.replace(',', ''))
-                        # Delivery charges ya chote values (< 50) filter out karne ke liye
                         if val > 50:
                             cleaned_prices.append(val)
                     except:
                         continue
                 if cleaned_prices:
-                    return f"₹{min(cleaned_prices):,.0f}"
+                    return float(min(cleaned_prices))
                     
     except Exception as e:
         print(f"Error fetching live price for {url}: {e}")
     return None
-
 # Background Thread jo saare watchlist items ko track karega
 def price_tracker_worker():
     global WATCHED_ITEMS
@@ -698,8 +697,9 @@ def price_tracker_worker():
                 title, url, old_price, target_price = row
                 target_price = target_price if target_price is not None else 0.0
                 
+                # price_val ab ek float number ya None hoga
                 price_val = fetch_live_price(url)
-                current_price_str = f"₹{price_val:,.0f}" if price_val else old_price
+                current_price_str = f"₹{price_val:,.0f}" if price_val is not None else old_price
                 
                 # Database update
                 conn = get_db_connection()
@@ -710,10 +710,8 @@ def price_tracker_worker():
                 conn.commit()
                 conn.close()
                 
-                # ==========================================
-                # 🛑 YAHAN DALNA HAI YE WALA CHECK BLOCK:
-                # ==========================================
-                if price_val and target_price > 0 and price_val <= target_price:
+                # Target price check (Ab price_val float hai, toh comparison safely hoga)
+                if price_val is not None and target_price > 0 and price_val <= target_price:
                     alert_msg = (
                         f"🚨🎯 **TARGET PRICE REACHED! ADDING TO CART!** 🎯🚨\n\n"
                         f"📦 **{title}**\n"
@@ -728,12 +726,10 @@ def price_tracker_worker():
                             loop = asyncio.new_event_loop()
                             asyncio.set_event_loop(loop)
                             loop.run_until_complete(client.send_message(DESTINATION, alert_msg))
-                            # Yeh function product ko cart me daal dega
                             loop.run_until_complete(trigger_add_to_cart(url, "e-commerce"))
                             loop.close()
                         except Exception as ex:
                             add_tracker_log(f"Failed to run add-to-cart automation: {ex}", is_error=True)
-                # ==========================================
 
                 updated_watched_list.append({
                     "title": title[:60] if title else "Watched Item",
@@ -751,7 +747,7 @@ def price_tracker_worker():
             add_tracker_log(f"Error in price tracker worker: {str(e)}", is_error=True)
             
         time.sleep(300)
-
+Isse update karne ke baad script ko restart kar dein, ab price fetching aur formatting bilkul smooth kaam karegi!
         
 async def process_message(event):
     chat = await event.get_chat()
