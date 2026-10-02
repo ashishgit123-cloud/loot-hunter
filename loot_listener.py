@@ -561,6 +561,20 @@ async def send_result(result, source, title, price, final_url, min_price_str, av
         except Exception:
             pass
 
+tracker_logs_cache = []
+
+def add_tracker_log(message, is_error=False):
+    global tracker_logs_cache
+    log_entry = {
+        "time": datetime.now(IST).strftime("%H:%M:%S"),
+        "message": message,
+        "error": is_error
+    }
+    tracker_logs_cache.append(log_entry)
+    # List ko 50 items tak limit rakhein taaki memory overload na ho
+    if len(tracker_logs_cache) > 50:
+        tracker_logs_cache.pop(0)
+
 # Background Thread jo saare watchlist items ko track karega
 def price_tracker_worker():
     global watched_items_cache, tracker_logs
