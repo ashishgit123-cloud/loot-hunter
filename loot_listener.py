@@ -201,21 +201,43 @@ def search_db():
         return jsonify({"answer": "Please enter a search query.", "deals": []})
     
     try:
+        # Step 1: Use LLM to extract the core product keyword from conversational sentence
+        search_keyword = query
+        if groq_client:
+            try:
+                extract_prompt = (
+                    "Extract only the core product, item, or brand keyword from the user's query for a database search. "
+                    "Return ONLY the single keyword/term (e.g., if query is 'shoes h kya deal me', return 'shoes'). "
+                    "Do not add extra punctuation or words.\n\nQuery: " + query
+                )
+                completion = groq_client.chat.completions.create(
+                    model="llama3-70b-8192",
+                    messages=[{"role": "user", "content": extract_prompt}],
+                    max_tokens=20,
+                    temperature=0.1
+                )
+                extracted = completion.choices[0].message.content.strip().lower()
+                if extracted and len(extracted) < 30:
+                    search_keyword = extracted
+            except Exception as e:
+                pass
+
         purge_old_deals()
         conn = get_db_connection()
         cursor = conn.cursor()
+        
+        # Step 2: Search database using the extracted keyword as well as original query
         cursor.execute("""
             SELECT title, price, min_price, avg_price, source, url, timestamp 
             FROM historical_deals 
-            WHERE title ILIKE %s OR source ILIKE %s
+            WHERE title ILIKE %s OR source ILIKE %s OR title ILIKE %s
             ORDER BY timestamp DESC 
             LIMIT 15
-        """, (f"%{query}%", f"%{query}%"))
+        """, (f"%{search_keyword}%", f"%{search_keyword}%", f"%{query}%"))
         rows = cursor.fetchall()
         conn.close()
         
         matched_deals = []
-        deals_context = []
         for row in rows:
             title, price, min_price, avg_price, source, url, timestamp = row
             deal_obj = {
@@ -224,30 +246,32 @@ def search_db():
                 "time": datetime.fromtimestamp(timestamp, IST).strftime("%H:%M:%S") if timestamp else datetime.now(IST).strftime("%H:%M:%S")
             }
             matched_deals.append(deal_obj)
-            deals_context.append(f"- Title: {title} | Price: {price} | Source: {source} | URL: {url}")
 
-        ai_answer = ""
+        if not matched_deals:
+            return jsonify({
+                "answer": f"Maaf kijiye, database mein '{search_keyword}' se related koi bhi deal available nahi hai.",
+                "deals": []
+            })
+
+        deals_context = [f"- Title: {d['title']} | Price: {d['price']} | Source: {d['source']} | URL: {d['url']}" for d in matched_deals]
+        
+        ai_answer = f"Yahan '{search_keyword}' se related deals mili hain:"
         if groq_client:
             try:
-                context_str = "\n".join(deals_context) if deals_context else "No direct deals found in database for this query."
+                context_str = "\n".join(deals_context)
                 prompt = (
-                    "You are an expert, friendly AI Shopping & Loot Deals Assistant. "
-                    "Answer the user's query conversationally and intelligently like a true AI chatbot. "
-                    "If database deals are provided below, incorporate them naturally. "
-                    "If no exact deals are found in the database, provide helpful shopping guidance, what prices to expect, or smart advice related to their query.\n\n"
-                    f"User Query: '{query}'\n\nDatabase Deals Available:\n{context_str}"
+                    "You are a helpful Loot Deals Assistant. Answer the user's conversational query naturally based on the database deals found below.\n\n"
+                    f"User Query: '{query}'\n\nDatabase Deals Found:\n{context_str}"
                 )
                 completion = groq_client.chat.completions.create(
                     model="llama3-70b-8192", 
                     messages=[{"role": "user", "content": prompt}], 
-                    max_tokens=300, 
-                    temperature=0.7
+                    max_tokens=250, 
+                    temperature=0.3
                 )
                 ai_answer = completion.choices[0].message.content.strip()
             except Exception as e:
-                ai_answer = f"Found {len(matched_deals)} matching deals."
-        else:
-            ai_answer = f"Here are the top deals found for '{query}':" if matched_deals else "No matching deals found."
+                pass
 
         return jsonify({"answer": ai_answer, "deals": matched_deals})
     except Exception as e:
