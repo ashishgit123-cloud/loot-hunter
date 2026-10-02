@@ -459,7 +459,8 @@
         <div class="brand">🔥 Loot Deal Command Center</div>
         
         <div class="header-right">
-            <button class="action-btn" onclick="promptAddWatchlist()">+ Add Watchlist</button>
+            <!-- Updated function call with Target Price support -->
+            <button class="action-btn" onclick="promptAddWatchlistWithPrice()">+ Add Watchlist</button>
             <a href="/export" class="export-btn">📥 Export CSV</a>
             <div class="system-status">
                 <div class="pulse-dot"></div>
@@ -600,17 +601,28 @@
             renderLogs();
         }
 
-        async function promptAddWatchlist() {
+        // Updated Watchlist prompt function with Target Price integration
+        async function promptAddWatchlistWithPrice() {
             let url = prompt("Enter Product URL to add to Live Watchlist:");
             if (!url) return;
+            
+            let targetPriceStr = prompt("Enter Target Price (e.g. 999):", "0");
+            if (targetPriceStr === null) return; // Agar user ne cancel kar diya
+            
+            let targetPrice = parseFloat(targetPriceStr) || 0;
+
             try {
                 let res = await fetch('/add_watchlist', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url: url })
+                    body: JSON.stringify({ 
+                        url: url, 
+                        target_price: targetPrice 
+                    })
                 });
                 let data = await res.json();
                 alert(data.message || "Added successfully!");
+                fetchStats(); // Dashboard data instantly update karne ke liye
             } catch (err) {
                 alert("Failed to add watchlist item.");
             }

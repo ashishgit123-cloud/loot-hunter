@@ -302,16 +302,26 @@ def search_db():
         print("Search error:", e)
         return jsonify({"answer": "An error occurred while processing your request.", "deals": []})
 
+from flask import redirect # Agar pehle se import nahi hai toh top par add kar lein
+
 @app.route("/add_watchlist", methods=["POST"])
 def add_watchlist():
     global WATCHED_ITEMS
-    data = request.json or {}
-    url = data.get("url", "").strip()
     
-    try:
-        target_price = float(data.get("target_price", 0) or 0)
-    except ValueError:
-        target_price = 0.0
+    # Check karein ki data JSON se aa raha hai ya HTML Form se
+    if request.is_json:
+        data = request.json or {}
+        url = data.get("url", "").strip()
+        try:
+            target_price = float(data.get("target_price", 0) or 0)
+        except ValueError:
+            target_price = 0.0
+    else:
+        url = request.form.get("url", "").strip()
+        try:
+            target_price = float(request.form.get("target_price", 0) or 0)
+        except ValueError:
+            target_price = 0.0
 
     if not url:
         return jsonify({"status": "error", "message": "URL is required"}), 400
@@ -337,11 +347,18 @@ def add_watchlist():
     try:
         save_watchlist_item_to_db(product_title, url, "Checking...", target_price)
     except Exception as e:
-        return jsonify({"status": "error", "message": f"Database error: {str(e)}"}), 500
+        if request.is_json:
+            return jsonify({"status": "error", "message": f"Database error: {str(e)}"}), 500
+        return f"Database error: {str(e)}", 500
 
     WATCHED_ITEMS = load_watchlist_from_db()
+    
+    # Agar standard HTML form submission hai toh wapas home page par bhej dein
+    if not request.is_json:
+        return redirect("/")
+        
     return jsonify({"status": "success", "message": f"Added: {product_title} (Target: ₹{target_price:,.0f})"})
-
+    
 @app.route("/export")
 def export_deals_csv():
     try:
@@ -879,6 +896,47 @@ async def discover():
             count += 1
     CHANNELS_COUNT = count
     await log(f"Listening to {count} broadcast channels")
+
+function addToWatchlist() {
+    const urlInput = document.getElementById("watchlist-url");
+    const targetPriceInput = document.getElementById("target-price");
+    
+    const url = urlInput.value.trim();
+    const targetPrice = targetPriceInput ? parseFloat(targetPriceInput.value) || 0 : 0;
+
+    if (!url) {
+        alert("Please enter a valid URL!");
+        return;
+    }
+
+    // Backend par JSON data bhejna
+    fetch('/add_watchlist', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            url: url,
+            target_price: targetPrice
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            alert(data.message);
+            urlInput.value = '';
+            if (targetPriceInput) targetPriceInput.value = '';
+            // Refresh stats or watchlist UI if needed
+            location.reload(); 
+        } else {
+            alert("Error: " + data.message);
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert("Failed to add to watchlist.");
+    });
+}
 
 async def main():
     web_thread = threading.Thread(target=run_web, daemon=True)
