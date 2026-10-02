@@ -563,33 +563,27 @@ async def send_result(result, source, title, price, final_url, min_price_str, av
 
 def fetch_live_price(url: str) -> str:
     try:
-        from deal_sources import get_offer_price
-        price_val = get_offer_price("", url)
-        if isinstance(price_val, (int, float)) and price_val > 0:
-            return f"₹{price_val:,.0f}"
-    except Exception as e:
-        pass
-    
-    try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept-Language": "en-US,en;q=0.9"
+            "Accept-Language": "en-US,en;q=0.9,hi;q=0.8",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
         }
         resp = requests.get(url, headers=headers, timeout=8)
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, 'html.parser')
             
-            # 1. Agar link Amazon ka hai, toh strict CSS selector use karein (taxes/MRP avoid karne ke liye)
+            # 1. Sirf Amazon ke liye special aur clean .a-offscreen selector
             if "amazon" in url.lower():
-                price_elem = soup.select_one(".priceToPay .a-price-whole") or soup.select_one(".a-price .a-price-whole")
-                if price_elem:
-                    cleaned = re.sub(r'[^\d.]', '', price_elem.get_text())
+                offscreen_elem = soup.select_one(".a-price .a-offscreen")
+                if offscreen_elem:
+                    price_text = offscreen_elem.get_text()
+                    cleaned = re.sub(r'[^\d.]', '', price_text)
                     if cleaned:
                         val = float(cleaned)
                         if val > 0:
                             return f"₹{val:,.0f}"
             
-            # 2. Flipkart ya baaki websites ke liye purana wala general regex logic jo pehle se badiya chal raha tha
+            # 2. Flipkart aur baaki sabhi sites ke liye wahi purana badiya regex logic
             text_content = soup.get_text()
             prices = re.findall(r'(?:₹|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)', text_content, re.IGNORECASE)
             if prices:
@@ -605,10 +599,9 @@ def fetch_live_price(url: str) -> str:
                     return f"₹{min(cleaned_prices):,.0f}"
                     
     except Exception as e:
-        print(f"Scraper error for {url}: {e}")
-        
+        print(f"Error fetching live price for {url}: {e}")
     return None
-    
+
 # Background Thread jo saare watchlist items ko track karega
 def price_tracker_worker():
     global WATCHED_ITEMS
