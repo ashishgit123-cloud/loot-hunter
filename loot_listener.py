@@ -11,7 +11,7 @@ import io
 import csv
 from collections import OrderedDict, deque
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from enum import Enum
 
 from dotenv import load_dotenv
@@ -37,6 +37,8 @@ TG_SESSION = os.getenv("TG_SESSION", "")
 DESTINATION = os.getenv("DESTINATION", "lootersAmer")
 LOG_CHANNEL = os.getenv("LOG_CHANNEL", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
+
+IST = timezone(timedelta(hours=5, minutes=30))
 
 WATCH_CHANNELS = {
     x.strip().lower().lstrip("@")
@@ -132,7 +134,7 @@ def load_watchlist_from_db():
                 "title": title,
                 "url": url,
                 "price": price,
-                "time": datetime.fromtimestamp(ts).strftime("%H:%M:%S") if ts else datetime.now().strftime("%H:%M:%S")
+                "time": datetime.now(IST).strftime("%H:%M:%S") if ts else IST.strftime("%H:%M:%S")
             })
     except Exception as e:
         print(f"Error loading watchlist from DB: {e}")
@@ -217,7 +219,7 @@ def search_db():
             deal_obj = {
                 "title": title[:100], "price": price, "min_price": min_price,
                 "avg_price": avg_price, "source": source, "url": url,
-                "time": datetime.fromtimestamp(timestamp).strftime("%H:%M:%S")
+                "time": datetime.now(IST).strftime("%H:%M:%S")
             }
             matched_deals.append(deal_obj)
             deals_context.append(f"- Title: {title} | Price: {price} | Source: {source} | URL: {url}")
@@ -287,7 +289,7 @@ def export_deals_csv():
             yield "Deal ID,Title,Price,Min Price,Avg Price,Source,URL,Verdict,Time\n"
             for row in rows:
                 deal_id, title, price, min_price, avg_price, source, url, verdict, ts = row
-                time_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+                time_str = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
                 safe_title = str(title).replace('"', '""')
                 yield f'"{deal_id}","{safe_title}","{price}","{min_price}","{avg_price}","{source}","{url}","{verdict}","{time_str}"\n'
 
@@ -342,7 +344,7 @@ def load_deals_from_db_on_startup():
                 item = {
                     "title": title[:100], "price": price, "min_price": min_price,
                     "avg_price": avg_price, "source": source, "url": url,
-                    "time": datetime.fromtimestamp(timestamp).strftime("%H:%M:%S")
+                    "time": datetime.now(IST).strftime("%H:%M:%S")
                 }
                 RECENT_DEALS.append(item)
                 if verdict_val in {Verdict.DEAL.value, Verdict.POSSIBLE_DEAL.value, "DEAL", "POSSIBLE_DEAL"}:
@@ -386,15 +388,23 @@ def title_from(text: str) -> str:
 
 def get_smart_title(text: str, url: Optional[str] = None) -> str:
     title = title_from(text)
+    
+    # Yahan promotional aur generic keywords badha diye hain
+    generic_keywords = [
+        "off", "discount", "sale", "upto", "flat", 
+        "price drop", "lowest price", "loot", "deal", "save", "time to shine"
+    ]
+    
     is_generic = (
         not title 
         or title == "Unknown Product" 
         or len(title) < 5 
         or "loot @" in title.lower() 
         or "deal @" in title.lower()
-        or any(k in title.lower() for k in ["off", "discount", "sale", "upto", "flat"])
+        or any(k in title.lower() for k in generic_keywords)
     )
     
+    # Agar title generic ya promotional text hai, toh URL se actual product name scrape karo
     if is_generic and url:
         try:
             from deal_sources import resolve_url, canonical_url
@@ -424,7 +434,7 @@ def get_smart_title(text: str, url: Optional[str] = None) -> str:
 
 async def log(msg: str, error: bool = False, send_to_telegram: bool = True):
     prefix = "❌" if error else "ℹ️"
-    timestamp = datetime.now().astimezone().strftime("%H:%M:%S")
+    timestamp = IST.astimezone().strftime("%H:%M:%S")
     line = f"[{timestamp}] {prefix} {msg}"
     print(line)
     global RECENT_LOGS
@@ -437,7 +447,7 @@ async def log(msg: str, error: bool = False, send_to_telegram: bool = True):
 
 async def tracker_log(msg: str, error: bool = False):
     prefix = "❌" if error else "⚡"
-    timestamp = datetime.now().astimezone().strftime("%H:%M:%S")
+    timestamp = IST.astimezone().strftime("%H:%M:%S")
     line = f"[{timestamp}] {prefix} [Tracker] {msg}"
     print(line)
     global TRACKER_LOGS
@@ -471,7 +481,7 @@ async def send_result(result, source, title, price, final_url, min_price_str, av
     
     posted_item = {
         "title": title[:100], "price": price_display, "min_price": min_price_str,
-        "avg_price": avg_price_str, "source": source, "url": final_url, "time": datetime.now().strftime("%H:%M:%S")
+        "avg_price": avg_price_str, "source": source, "url": final_url, "time": IST.strftime("%H:%M:%S")
     }
     
     if not POSTED_DEALS or POSTED_DEALS[0]["url"] != final_url:
@@ -599,7 +609,7 @@ async def process_message(event):
 
     item = {
         "title": title[:100], "price": price_display, "min_price": db_min_str,
-        "avg_price": db_avg_str, "source": source, "url": deal_url, "time": datetime.now().strftime("%H:%M:%S")
+        "avg_price": db_avg_str, "source": source, "url": deal_url, "time": IST.strftime("%H:%M:%S")
     }
     RECENT_DEALS.appendleft(item)
 

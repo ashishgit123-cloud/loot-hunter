@@ -344,12 +344,49 @@ def extract_page_price(html: str) -> Optional[float]:
 
 def fetch_product_price(url: str) -> Optional[float]:
     try:
-        response = requests.get(url, headers=HEADERS, timeout=TIMEOUT, allow_redirects=True)
-        if response.status_code != 200:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        }
+        resp = requests.get(url, headers=headers, timeout=8)
+        if resp.status_code != 200:
             return None
-        return extract_page_price(response.text)
-    except requests.RequestException:
-        return None
+            
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        
+        # 1️⃣ Agar link Amazon ka hai, toh uske specific price tags dhoondo
+        if "amazon." in url.lower():
+            # Amazon ka current price aksar is selector mein hota hai
+            price_elem = soup.select_one('.a-price .a-offscreen')
+            if price_elem:
+                price_text = price_elem.get_text()
+                cleaned = re.sub(r'[^\d.]', '', price_text)
+                if cleaned:
+                    return float(cleaned)
+            
+            # Fallback: Agar class na mile toh corePrice div se try karo
+            core_price = soup.select_main('#corePrice_desktop_feature_div, #corePriceDisplay_desktop_feature_div')
+            if core_price:
+                text_content = core_price.get_text()
+                # Yahan se ₹ ke baad ka pehla valid number nikalo jo MRP na ho
+                matches = re.findall(r'₹\s*([\d,]+\.?\d*)', text_content)
+                if matches:
+                    # Pehla price aksar selling price hota hai agar sahi order ho
+                    clean_val = float(matches[0].replace(',', ''))
+                    return clean_val
+
+        # 2️⃣ Flipkart ya doosri sites ke liye general selector
+        price_elem = soup.select_one('div._30jeq3, div._1vC4OE, span.a-price .a-offscreen')
+        if price_elem:
+            cleaned = re.sub(r'[^\d.]', '', price_elem.get_text())
+            if cleaned:
+                return float(cleaned)
+                
+    except Exception as e:
+        print(f"Fetch price error for {url}: {e}")
+        
+    return None
 
 
 def pricehistory_url(product_url: str) -> str:
