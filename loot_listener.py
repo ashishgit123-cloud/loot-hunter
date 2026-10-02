@@ -28,7 +28,7 @@ import psycopg2
 werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.ERROR)
 
-VERSION = "6.9.3"
+VERSION = "6.9.4"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -130,7 +130,6 @@ def load_watchlist_from_db():
         conn.close()
         for row in rows:
             title, url, price, ts = row
-            # Error fixed here: using datetime.fromtimestamp with IST
             time_str = datetime.fromtimestamp(ts, IST).strftime("%H:%M:%S") if ts else datetime.now(IST).strftime("%H:%M:%S")
             items.append({
                 "title": title,
@@ -178,17 +177,16 @@ def get_uptime_string() -> str:
 
 @app.route("/stats")
 def get_stats():
-    # Yahan ensure karein ki 'watched_items' mein poori list bheji ja rahi hai
     return jsonify({
-        "deals_scanned": total_deals_scanned_count,
-        "posted_deals": posted_deals_cache,
-        "watched_items": watched_items_cache, # Yeh saare watched items ki list honi chahiye
-        "channels_count": len(TELEGRAM_CHANNELS),
-        "uptime": get_bot_uptime(),
-        "dedup_size": len(seen_deals_cache),
-        "recent_deals": recent_scanned_cache,
-        "recent_logs": system_logs_cache,
-        "tracker_logs": tracker_logs_cache
+        "deals_scanned": DEALS_SCANNED,
+        "posted_deals": list(POSTED_DEALS),
+        "watched_items": WATCHED_ITEMS,
+        "channels_count": CHANNELS_COUNT,
+        "uptime": get_uptime_string(),
+        "dedup_size": len(seen),
+        "recent_deals": list(RECENT_DEALS),
+        "recent_logs": list(RECENT_LOGS),
+        "tracker_logs": list(TRACKER_LOGS)
     })
 
 @app.route("/search")
@@ -200,12 +198,10 @@ def search_db():
     try:
         purge_old_deals()
         
-        # Default fallback parameters
         keyword = query
         order_by = "timestamp DESC"
         limit = 15
         
-        # Step 1: LLM se user ke sawaal ka 'intent' aur 'keyword' JSON format me nikalwayein
         if groq_client:
             try:
                 prompt = (
@@ -224,7 +220,6 @@ def search_db():
                 )
                 res_text = completion.choices[0].message.content.strip()
                 
-                # Clean markdown if present
                 if res_text.startswith("```"):
                     res_text = res_text.split("```")[1]
                     if res_text.startswith("json"):
@@ -241,7 +236,11 @@ def search_db():
             except Exception as e:
                 print("Intent extraction error:", e)
 
-        # Step 2: Python controlled safe SQL execution based on extracted filters
+        stopwords = ['minimum', 'min', 'max', 'maximum', 'sasta', 'cheapest', 'best', 'latest', 'konsa', 'ka', 'ki', 'ke', 'hai', 'kya', 'deal', 'deals', 'me', 'mein', 'price', 'wala', 'wali']
+        if keyword.lower() in stopwords or len(keyword.strip()) < 2:
+            words = [w for w in query.lower().split() if w not in stopwords]
+            keyword = " ".join(words) if words else query
+
         conn = get_db_connection()
         cursor = conn.cursor()
         
@@ -276,7 +275,6 @@ def search_db():
                 "deals": []
             })
 
-        # Step 3: LLM formats the final response nicely for the user
         deals_context = [f"- Title: {d['title']} | Price: {d['price']} | Source: {d['source']} | URL: {d['url']}" for d in matched_deals]
         ai_answer = f"Yahan '{keyword}' se related deals hain:"
         if groq_client:
@@ -502,13 +500,15 @@ async def log(msg: str, error: bool = False, send_to_telegram: bool = True):
         except Exception:
             pass
 
-async def tracker_log(msg: str, error: bool = False):
-    prefix = "❌" if error else "⚡"
+def add_tracker_log(msg: str, is_error: bool = False):
+    prefix = "❌" if is_error else "⚡"
     timestamp = datetime.now(IST).strftime("%H:%M:%S")
     line = f"[{timestamp}] {prefix} [Tracker] {msg}"
     print(line)
-    global TRACKER_LOGS
-    TRACKER_LOGS.appendleft({"time": timestamp, "prefix": prefix, "msg": msg, "is_error": error})
+    TRACKER_LOGS.appendleft({"time": timestamp, "prefix": prefix, "msg": msg, "is_error": is_error})
+
+async def tracker_log(msg: str, error: bool = False):
+    add_tracker_log(msg, is_error=error)
 
 def channel_allowed(chat) -> bool:
     if not WATCH_CHANNELS:
@@ -561,72 +561,74 @@ async def send_result(result, source, title, price, final_url, min_price_str, av
         except Exception:
             pass
 
-tracker_logs_cache = []
-
-def add_tracker_log(message, is_error=False):
-    global tracker_logs_cache
-    log_entry = {
-        "time": datetime.now(IST).strftime("%H:%M:%S"),
-        "message": message,
-        "error": is_error
-    }
-    tracker_logs_cache.append(log_entry)
-    # List ko 50 items tak limit rakhein taaki memory overload na ho
-    if len(tracker_logs_cache) > 50:
-        tracker_logs_cache.pop(0)
+def fetch_live_price(url: str) -> str:
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        resp = requests.get(url, headers=headers, timeout=8)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            text_content = soup.get_text()
+            prices = re.findall(r'(?:₹|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)', text_content, re.IGNORECASE)
+            if prices:
+                cleaned_prices = []
+                for p in prices:
+                    try:
+                        val = float(p.replace(',', ''))
+                        if val > 0:
+                            cleaned_prices.append(val)
+                    except:
+                        continue
+                if cleaned_prices:
+                    return f"₹{min(cleaned_prices):,.0f}"
+    except Exception as e:
+        print(f"Error fetching live price for {url}: {e}")
+    return None
 
 # Background Thread jo saare watchlist items ko track karega
 def price_tracker_worker():
-    global watched_items_cache, tracker_logs
+    global WATCHED_ITEMS
     while True:
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
-            # Database se saare saved watchlist items nikalain
-            cursor.execute("SELECT id, title, url, price FROM watchlist ORDER BY timestamp DESC")
+            cursor.execute("SELECT title, url, price FROM watchlist ORDER BY timestamp DESC")
             rows = cursor.fetchall()
             conn.close()
             
             updated_watched_list = []
             
             for row in rows:
-                item_id, title, url, old_price = row
+                title, url, old_price = row
                 
-                # Yahan aap apna scraping/price checking logic lagayein jo URL se live price nikal sake
-                # Example ke taur par, maan lijiye live price fetch hoti hai:
-                current_price = fetch_live_price(url) # Aapka scraping function
-                
+                current_price = fetch_live_price(url)
                 if not current_price:
-                    current_price = old_price # Fallback agar scrape na ho paye
+                    current_price = old_price
                 
-                # Database mein price update karein
                 conn = get_db_connection()
                 cursor = conn.cursor()
-                cursor.execute("UPDATE watchlist SET price = %s, timestamp = %s WHERE id = %s", 
-                               (current_price, int(time.time()), item_id))
+                cursor.execute("""
+                    UPDATE watchlist SET price = %s, timestamp = %s WHERE url = %s
+                """, (str(current_price), time.time(), url))
                 conn.commit()
                 conn.close()
                 
-                # Cache list mein add karein taaki frontend par sabhi dikhein
                 updated_watched_list.append({
                     "title": title[:60] if title else "Watched Item",
-                    "price": current_price,
+                    "price": str(current_price),
                     "url": url,
                     "time": datetime.now(IST).strftime("%H:%M:%S")
                 })
                 
                 add_tracker_log(f"Checked price for '{title[:30]}': {current_price}")
             
-            # Global cache update karein taaki /stats sabhi ko bhej sake
-            watched_items_cache = updated_watched_list
+            WATCHED_ITEMS = updated_watched_list
             
         except Exception as e:
             add_tracker_log(f"Error in price tracker worker: {str(e)}", is_error=True)
             
-        # Har 5 ya 10 minutes baad saare items ko dobara check karega
         time.sleep(300) 
-
-
 
 async def process_message(event):
     chat = await event.get_chat()
@@ -754,7 +756,7 @@ async def main():
     web_thread.start()
     await log("Web dashboard thread started")
 
-    asyncio.create_task(price_tracker_worker())
+    threading.Thread(target=price_tracker_worker, daemon=True).start()
     await tracker_log("Live Price Tracker worker spawned in parallel background loop.")
 
     await client.start()
