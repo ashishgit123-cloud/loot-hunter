@@ -24,6 +24,8 @@ from groq import Groq
 import requests
 from bs4 import BeautifulSoup
 import psycopg2
+import time
+from playwright.sync_api import sync_playwright
 
 # Suppress Flask/Werkzeug HTTP access logs
 werkzeug_logger = logging.getLogger('werkzeug')
@@ -585,34 +587,33 @@ async def send_result(result, source, title, price, final_url, min_price_str, av
         except Exception:
             pass
 
-async def trigger_add_to_cart(url: str, source_site: str):
+def trigger_add_to_cart(url: str, source_site: str):
     add_tracker_log(f"🛒 Starting 'Add to Cart' Automation for: {url}")
     try:
-        async with async_playwright() as p:
+        # sync_playwright ka use karein taaki koi event loop conflict na ho
+        with sync_playwright() as p:
             add_tracker_log("🌐 Launching browser...")
             
-            # Persistent context ki jagah standard launch use karein taaki event loop conflict na ho
-            browser = await p.chromium.launch(
+            browser = p.chromium.launch(
                 headless=False, 
                 args=["--disable-blink-features=AutomationControlled"]
             )
             
-            # Naya clean context aur page banayein
-            context = await browser.new_context(
+            context = browser.new_context(
                 viewport={"width": 1280, "height": 800},
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
             )
-            page = await context.new_page()
+            page = context.new_page()
             
             add_tracker_log(f"🔗 Navigating to product page...")
-            await page.goto(url, timeout=60000)
+            page.goto(url, timeout=60000)
             
             if "flipkart" in url.lower():
                 try:
                     add_tracker_log("🔍 Flipkart: Looking for 'Add to Cart' button...")
-                    cart_button = await page.wait_for_selector("button:has-text('Add to Cart'), button:has-text('ADD TO CART'), button._2KpZ6l._3AWRsL._3vhnxf", timeout=8000)
+                    cart_button = page.wait_for_selector("button:has-text('Add to Cart'), button:has-text('ADD TO CART'), button._2KpZ6l._3AWRsL._3vhnxf", timeout=8000)
                     if cart_button:
-                        await cart_button.click()
+                        cart_button.click()
                         add_tracker_log("✅ Flipkart: Successfully clicked 'Add to Cart'!")
                 except Exception as e:
                     add_tracker_log(f"⚠️ Flipkart 'Add to Cart' error: {e}", is_error=True)
@@ -620,21 +621,20 @@ async def trigger_add_to_cart(url: str, source_site: str):
             elif "amazon" in url.lower():
                 try:
                     add_tracker_log("🔍 Amazon: Looking for 'Add to Cart' button...")
-                    cart_btn = await page.wait_for_selector("#add-to-cart-button, input#add-to-cart-button, input[name='submit.add-to-cart']", timeout=8000)
+                    cart_btn = page.wait_for_selector("#add-to-cart-button, input#add-to-cart-button, input[name='submit.add-to-cart']", timeout=8000)
                     if cart_btn:
-                        await cart_btn.click()
+                        cart_btn.click()
                         add_tracker_log("✅ Amazon: Successfully clicked 'Add to Cart'!")
                 except Exception as e:
                     add_tracker_log(f"⚠️ Amazon 'Add to Cart' error: {e}", is_error=True)
             
             add_tracker_log("⏳ Product successfully processed. Closing browser in 10 seconds...")
-            await asyncio.sleep(10)
-            await browser.close()
+            time.sleep(10)  # asyncio.sleep ki jagah standard time.sleep
+            browser.close()
             add_tracker_log("🔒 Browser session closed safely.")
             
     except Exception as e:
         add_tracker_log(f"❌ Add to Cart automation error: {e}", is_error=True)
-
 def fetch_live_price(url: str) -> Optional[float]:
     try:
         headers = {
