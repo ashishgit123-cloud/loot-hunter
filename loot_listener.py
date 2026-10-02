@@ -18,13 +18,12 @@ from enum import Enum
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from flask import Flask, jsonify, render_template, request, Response
+from flask import Flask, jsonify, render_template, request, Response, redirect
 import threading
 from groq import Groq
 import requests
 from bs4 import BeautifulSoup
 import psycopg2
-import time
 from playwright.sync_api import sync_playwright
 
 # Suppress Flask/Werkzeug HTTP access logs
@@ -117,6 +116,14 @@ def init_db():
                 timestamp DOUBLE PRECISION
             )
         """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS added_to_cart (
+                url TEXT PRIMARY KEY,
+                title TEXT,
+                price TEXT,
+                timestamp DOUBLE PRECISION
+            )
+        """)
         conn.commit()
         conn.close()
     except Exception as e:
@@ -146,6 +153,27 @@ def load_watchlist_from_db():
         print(f"Error loading watchlist from DB: {e}")
     return items
 
+def load_cart_items_from_db():
+    items = []
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT title, url, price, timestamp FROM added_to_cart ORDER BY timestamp DESC")
+        rows = cursor.fetchall()
+        conn.close()
+        for row in rows:
+            title, url, price, ts = row
+            time_str = datetime.fromtimestamp(ts, IST).strftime("%H:%M:%S") if ts else datetime.now(IST).strftime("%H:%M:%S")
+            items.append({
+                "title": title,
+                "url": url,
+                "price": price,
+                "time": time_str
+            })
+    except Exception as e:
+        print(f"Error loading cart items from DB: {e}")
+    return items
+
 def save_watchlist_item_to_db(title: str, url: str, price: str, target_price: float):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -159,6 +187,7 @@ def save_watchlist_item_to_db(title: str, url: str, price: str, target_price: fl
     conn.close()
 
 WATCHED_ITEMS = load_watchlist_from_db()
+CART_ITEMS = load_cart_items_from_db()
 
 START_TIME = time.time()
 CHANNELS_COUNT = 0
@@ -186,6 +215,7 @@ def get_stats():
         "deals_scanned": DEALS_SCANNED,
         "posted_deals": list(POSTED_DEALS),
         "watched_items": WATCHED_ITEMS,
+        "cart_items": CART_ITEMS,
         "channels_count": CHANNELS_COUNT,
         "uptime": get_uptime_string(),
         "dedup_size": len(seen),
@@ -308,7 +338,6 @@ def search_db():
 def add_watchlist():
     global WATCHED_ITEMS
     
-    # Check karein ki data JSON se aa raha hai ya HTML Form se
     if request.is_json:
         data = request.json or {}
         url = data.get("url", "").strip()
@@ -353,11 +382,38 @@ def add_watchlist():
 
     WATCHED_ITEMS = load_watchlist_from_db()
     
-    # Agar standard HTML form submission hai toh wapas home page par bhej dein
     if not request.is_json:
         return redirect("/")
         
     return jsonify({"status": "success", "message": f"Added: {product_title} (Target: ₹{target_price:,.0f})"})
+
+@app.route("/delete_watchlist", methods=["POST"])
+def delete_watchlist():
+    global WATCHED_ITEMS
+    if request.is_json:
+        data = request.json or {}
+        url = data.get("url", "").strip()
+    else:
+        url = request.form.get("url", "").strip()
+
+    if not url:
+        return jsonify({"status": "error", "message": "URL is required"}), 400
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM watchlist WHERE url = %s", (url,))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        if request.is_json:
+            return jsonify({"status": "error", "message": f"Database error: {str(e)}"}), 500
+        return f"Database error: {str(e)}", 500
+
+    WATCHED_ITEMS = load_watchlist_from_db()
+    if not request.is_json:
+        return redirect("/")
+    return jsonify({"status": "success", "message": "Item deleted from watchlist"})
 
 @app.route("/export")
 def export_deals_csv():
@@ -587,24 +643,21 @@ async def send_result(result, source, title, price, final_url, min_price_str, av
         except Exception:
             pass
 
-def trigger_add_to_cart(url: str, source_site: str):
+def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float):
     add_tracker_log(f"🛒 Starting 'Add to Cart' Automation for: {url}")
+    success = False
     try:
-        # sync_playwright ka use karein taaki koi event loop conflict na ho
         with sync_playwright() as p:
             add_tracker_log("🌐 Launching browser...")
-            
             browser = p.chromium.launch(
                 headless=False, 
                 args=["--disable-blink-features=AutomationControlled"]
             )
-            
             context = browser.new_context(
                 viewport={"width": 1280, "height": 800},
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
             )
             page = context.new_page()
-            
             add_tracker_log(f"🔗 Navigating to product page...")
             page.goto(url, timeout=60000)
             
@@ -615,6 +668,7 @@ def trigger_add_to_cart(url: str, source_site: str):
                     if cart_button:
                         cart_button.click()
                         add_tracker_log("✅ Flipkart: Successfully clicked 'Add to Cart'!")
+                        success = True
                 except Exception as e:
                     add_tracker_log(f"⚠️ Flipkart 'Add to Cart' error: {e}", is_error=True)
 
@@ -625,16 +679,42 @@ def trigger_add_to_cart(url: str, source_site: str):
                     if cart_btn:
                         cart_btn.click()
                         add_tracker_log("✅ Amazon: Successfully clicked 'Add to Cart'!")
+                        success = True
                 except Exception as e:
-                    add_tracker_log(f"⚠️ Amazon 'Add to Cart' error: {e}", is_error=True)
+                    add_tracker_log(f"⚠️️ Amazon 'Add to Cart' error: {e}", is_error=True)
+            else:
+                try:
+                    cart_btn = page.wait_for_selector("button:has-text('Add to Cart'), button:has-text('Add to Bag')", timeout=8000)
+                    if cart_btn:
+                        cart_btn.click()
+                        add_tracker_log("✅ Successfully clicked generic Add to Cart button!")
+                        success = True
+                except Exception as e:
+                    add_tracker_log(f"⚠️ Generic Add to Cart error: {e}", is_error=True)
             
-            add_tracker_log("⏳ Product successfully processed. Closing browser in 10 seconds...")
-            time.sleep(10)  # asyncio.sleep ki jagah standard time.sleep
+            time.sleep(5)
             browser.close()
             add_tracker_log("🔒 Browser session closed safely.")
             
     except Exception as e:
         add_tracker_log(f"❌ Add to Cart automation error: {e}", is_error=True)
+
+    if success:
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO added_to_cart (url, title, price, timestamp)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (url) DO UPDATE SET title = EXCLUDED.title, price = EXCLUDED.price, timestamp = EXCLUDED.timestamp
+            """, (url, title, f"₹{price_val:,.0f}", time.time()))
+            cursor.execute("DELETE FROM watchlist WHERE url = %s", (url,))
+            conn.commit()
+            conn.close()
+            add_tracker_log(f"📦 Successfully moved item to 'Added to Cart' table: {title}")
+        except Exception as db_err:
+            add_tracker_log(f"❌ Database move error: {db_err}", is_error=True)
+
 def fetch_live_price(url: str) -> Optional[float]:
     try:
         headers = {
@@ -699,7 +779,7 @@ def fetch_live_price(url: str) -> Optional[float]:
     return None
 
 def price_tracker_worker():
-    global WATCHED_ITEMS
+    global WATCHED_ITEMS, CART_ITEMS
     while True:
         try:
             conn = get_db_connection()
@@ -739,10 +819,14 @@ def price_tracker_worker():
                             loop = asyncio.new_event_loop()
                             asyncio.set_event_loop(loop)
                             loop.run_until_complete(client.send_message(DESTINATION, alert_msg))
-                            loop.run_until_complete(trigger_add_to_cart(url, "e-commerce"))
                             loop.close()
                         except Exception as ex:
-                            add_tracker_log(f"Failed to run add-to-cart automation: {ex}", is_error=True)
+                            add_tracker_log(f"Failed to send Telegram alert: {ex}", is_error=True)
+
+                    try:
+                        trigger_add_to_cart(url, "e-commerce", title, price_val)
+                    except Exception as ex:
+                        add_tracker_log(f"Failed to run add-to-cart automation: {ex}", is_error=True)
 
                 updated_watched_list.append({
                     "title": title[:60] if title else "Watched Item",
@@ -754,7 +838,8 @@ def price_tracker_worker():
                 
                 add_tracker_log(f"Checked '{title[:25]}': {current_price_str} (Target: ₹{target_price:,.0f})")
             
-            WATCHED_ITEMS = updated_watched_list
+            WATCHED_ITEMS = load_watchlist_from_db()
+            CART_ITEMS = load_cart_items_from_db()
             
         except Exception as e:
             add_tracker_log(f"Error in price tracker worker: {str(e)}", is_error=True)
@@ -892,14 +977,13 @@ async def heartbeat():
 async def discover():
     global CHANNELS_COUNT
     load_deals_from_db_on_startup()
-    dialogs = await client.get_dialogs()
+    dialogs = await client.load_dialogs() if hasattr(client, 'load_dialogs') else await client.get_dialogs()
     count = 0
     for dialog in dialogs:
         if getattr(dialog.entity, "broadcast", False):
             count += 1
     CHANNELS_COUNT = count
     await log(f"Listening to {count} broadcast channels")
-
 
 async def main():
     web_thread = threading.Thread(target=run_web, daemon=True)

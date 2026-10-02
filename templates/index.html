@@ -128,7 +128,7 @@
 
         .top-section {
             display: grid;
-            grid-template-columns: 240px 1fr 1fr 1fr;
+            grid-template-columns: 220px 1fr 1fr 1fr 1fr;
             gap: 15px;
         }
 
@@ -438,7 +438,7 @@
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
 
-        @media (max-width: 1024px) {
+        @media (max-width: 1200px) {
             .top-section {
                 grid-template-columns: 1fr;
             }
@@ -459,12 +459,11 @@
         <div class="brand">🔥 Loot Deal Command Center</div>
         
         <div class="header-right">
-            <!-- Updated function call with Target Price support -->
             <button class="action-btn" onclick="promptAddWatchlistWithPrice()">+ Add Watchlist</button>
             <a href="/export" class="export-btn">📥 Export CSV</a>
             <div class="system-status">
                 <div class="pulse-dot"></div>
-                <span>Bot Active (v6.6)</span>
+                <span>Bot Active (v6.9.7)</span>
             </div>
         </div>
     </header>
@@ -542,6 +541,19 @@
                 </div>
             </div>
 
+            <!-- Added to Cart Feed -->
+            <div class="feed-container">
+                <div class="feed-header">
+                    <h2>🛒 Added to Cart</h2>
+                    <span style="font-size: 0.68rem; color: var(--text-muted);" id="cartCountBadge">0 items</span>
+                </div>
+                <div class="feed-list" id="cartList">
+                    <div class="deal-card posted">
+                        <div class="deal-title">No items added to cart yet...</div>
+                    </div>
+                </div>
+            </div>
+
         </div>
 
         <!-- Terminal Console Section with Tabs -->
@@ -601,13 +613,12 @@
             renderLogs();
         }
 
-        // Updated Watchlist prompt function with Target Price integration
         async function promptAddWatchlistWithPrice() {
             let url = prompt("Enter Product URL to add to Live Watchlist:");
             if (!url) return;
             
             let targetPriceStr = prompt("Enter Target Price (e.g. 999):", "0");
-            if (targetPriceStr === null) return; // Agar user ne cancel kar diya
+            if (targetPriceStr === null) return;
             
             let targetPrice = parseFloat(targetPriceStr) || 0;
 
@@ -622,9 +633,25 @@
                 });
                 let data = await res.json();
                 alert(data.message || "Added successfully!");
-                fetchStats(); // Dashboard data instantly update karne ke liye
+                fetchStats();
             } catch (err) {
                 alert("Failed to add watchlist item.");
+            }
+        }
+
+        async function deleteWatchlistItem(url) {
+            if (!confirm("Kya aap is item ko watchlist se delete karna chahte hain?")) return;
+            try {
+                let res = await fetch('/delete_watchlist', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: url })
+                });
+                let data = await res.json();
+                alert(data.message || "Deleted successfully!");
+                fetchStats();
+            } catch (err) {
+                alert("Failed to delete item.");
             }
         }
 
@@ -691,7 +718,7 @@
                     }
                 }
 
-                // Render Live Watched Items Feed
+                // Render Live Watched Items Feed with Delete Emoji Button
                 if (cachedData.watched_items) {
                     document.getElementById('trackerCountBadge').innerText = `${cachedData.watched_items.length} items`;
                     let container = document.getElementById('trackerList');
@@ -699,16 +726,44 @@
                         let html = '';
                         cachedData.watched_items.forEach(item => {
                             html += `
-                                <div class="deal-card tracker">
+                                <div class="deal-card tracker" style="display: flex; justify-content: space-between; align-items: center;">
+                                    <div style="flex-grow: 1; overflow: hidden; margin-right: 8px;">
+                                        <div class="deal-title"><a href="${item.url}" target="_blank">${item.title}</a></div>
+                                        <div class="deal-footer">
+                                            <span class="deal-price">Live: ${item.price}</span>
+                                            <span>Checked: ${item.time}</span>
+                                        </div>
+                                    </div>
+                                    <button onclick="deleteWatchlistItem('${item.url}')" title="Delete Watchlist Item" style="background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.3); color: var(--accent-red); padding: 5px 8px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; flex-shrink: 0;">🗑️</button>
+                                </div>
+                            `;
+                        });
+                        container.innerHTML = html;
+                    } else {
+                        container.innerHTML = `<div class="deal-card tracker"><div class="deal-title">Tracking watchlist items...</div></div>`;
+                    }
+                }
+
+                // Render Added to Cart Feed
+                if (cachedData.cart_items) {
+                    document.getElementById('cartCountBadge').innerText = `${cachedData.cart_items.length} items`;
+                    let container = document.getElementById('cartList');
+                    if (cachedData.cart_items.length > 0) {
+                        let html = '';
+                        cachedData.cart_items.forEach(item => {
+                            html += `
+                                <div class="deal-card posted">
                                     <div class="deal-title"><a href="${item.url}" target="_blank">${item.title}</a></div>
                                     <div class="deal-footer">
-                                        <span class="deal-price">Live: ${item.price}</span>
-                                        <span>Checked: ${item.time}</span>
+                                        <span class="deal-price">Price: ${item.price}</span>
+                                        <span>Added: ${item.time}</span>
                                     </div>
                                 </div>
                             `;
                         });
                         container.innerHTML = html;
+                    } else {
+                        container.innerHTML = `<div class="deal-card posted"><div class="deal-title">No items added to cart yet...</div></div>`;
                     }
                 }
 
@@ -740,20 +795,16 @@
             }
         }
 
-        // Floating Chatbot Message Handler
         async function sendChatMessage() {
             let inputField = document.getElementById('chatInput');
             let query = inputField.value.trim();
             if (!query) return;
 
             let chatBox = document.getElementById('chatBox');
-            
-            // User Message
             chatBox.innerHTML += `<div class="chat-msg user-msg">${escapeHtml(query)}</div>`;
             inputField.value = '';
             chatBox.scrollTop = chatBox.scrollHeight;
 
-            // Loading state
             let loadId = 'loading-' + Date.now();
             chatBox.innerHTML += `<div id="${loadId}" class="chat-msg bot-msg">Thinking & analyzing deals...</div>`;
             chatBox.scrollTop = chatBox.scrollHeight;
