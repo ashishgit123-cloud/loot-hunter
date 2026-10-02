@@ -111,6 +111,7 @@ def init_db():
                 url TEXT PRIMARY KEY,
                 title TEXT,
                 price TEXT,
+                target_price DOUBLE PRECISION,
                 timestamp DOUBLE PRECISION
             )
         """)
@@ -126,31 +127,32 @@ def load_watchlist_from_db():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT title, url, price, timestamp FROM watchlist ORDER BY timestamp DESC")
+        cursor.execute("SELECT title, url, price, target_price, timestamp FROM watchlist ORDER BY timestamp DESC")
         rows = cursor.fetchall()
         conn.close()
         for row in rows:
-            title, url, price, ts = row
+            title, url, price, target_price, ts = row
             time_str = datetime.fromtimestamp(ts, IST).strftime("%H:%M:%S") if ts else datetime.now(IST).strftime("%H:%M:%S")
             items.append({
                 "title": title,
                 "url": url,
                 "price": price,
+                "target_price": target_price if target_price is not None else 0.0,
                 "time": time_str
             })
     except Exception as e:
         print(f"Error loading watchlist from DB: {e}")
     return items
 
-def save_watchlist_item_to_db(title: str, url: str, price: str):
+def save_watchlist_item_to_db(title: str, url: str, price: str, target_price: float):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO watchlist (url, title, price, timestamp)
-        VALUES (%s, %s, %s, %s)
+        INSERT INTO watchlist (url, title, price, target_price, timestamp)
+        VALUES (%s, %s, %s, %s, %s)
         ON CONFLICT (url) DO UPDATE SET 
-        title = EXCLUDED.title, price = EXCLUDED.price, timestamp = EXCLUDED.timestamp
-    """, (url, title, price, time.time()))
+        title = EXCLUDED.title, price = EXCLUDED.price, target_price = EXCLUDED.target_price, timestamp = EXCLUDED.timestamp
+    """, (url, title, price, target_price, time.time()))
     conn.commit()
     conn.close()
 
@@ -305,6 +307,12 @@ def add_watchlist():
     global WATCHED_ITEMS
     data = request.json or {}
     url = data.get("url", "").strip()
+    
+    try:
+        target_price = float(data.get("target_price", 0) or 0)
+    except ValueError:
+        target_price = 0.0
+
     if not url:
         return jsonify({"status": "error", "message": "URL is required"}), 400
     
@@ -327,12 +335,12 @@ def add_watchlist():
         product_title = url.split('/')[-1].replace('-', ' ').title() or "Custom Item"
 
     try:
-        save_watchlist_item_to_db(product_title, url, "Checking...")
+        save_watchlist_item_to_db(product_title, url, "Checking...", target_price)
     except Exception as e:
         return jsonify({"status": "error", "message": f"Database error: {str(e)}"}), 500
 
     WATCHED_ITEMS = load_watchlist_from_db()
-    return jsonify({"status": "success", "message": f"Added: {product_title}"})
+    return jsonify({"status": "success", "message": f"Added: {product_title} (Target: ₹{target_price:,.0f})"})
 
 @app.route("/export")
 def export_deals_csv():
@@ -489,7 +497,7 @@ def get_smart_title(text: str, url: Optional[str] = None) -> str:
     return title
 
 async def log(msg: str, error: bool = False, send_to_telegram: bool = True):
-    prefix = "❌" if error else "ℹ️️"
+    prefix = "❌" if error else "ℹ"
     timestamp = datetime.now(IST).strftime("%H:%M:%S")
     line = f"[{timestamp}] {prefix} {msg}"
     print(line)
@@ -563,9 +571,6 @@ async def send_result(result, source, title, price, final_url, min_price_str, av
             pass
 
 async def trigger_add_to_cart(url: str, source_site: str):
-    """
-    Target price hit hone par product ko seedha Cart mein add karega.
-    """
     add_tracker_log(f"🛒 Starting 'Add to Cart' Automation for: {url}")
     try:
         async with async_playwright() as p:
@@ -582,11 +587,9 @@ async def trigger_add_to_cart(url: str, source_site: str):
             add_tracker_log(f"🔗 Navigating to product page...")
             await page.goto(url, timeout=60000)
             
-            # --- 1. FLIPKART ADD TO CART ---
             if "flipkart" in url.lower():
                 try:
                     add_tracker_log("🔍 Flipkart: Looking for 'Add to Cart' button...")
-                    # Text ya class ke zariye Add to Cart dhoondna
                     cart_button = await page.wait_for_selector("button:has-text('Add to Cart'), button:has-text('ADD TO CART'), button._2KpZ6l._3AWRsL._3vhnxf", timeout=8000)
                     if cart_button:
                         await cart_button.click()
@@ -594,7 +597,6 @@ async def trigger_add_to_cart(url: str, source_site: str):
                 except Exception as e:
                     add_tracker_log(f"⚠️ Flipkart 'Add to Cart' error: {e}", is_error=True)
 
-            # --- 2. AMAZON ADD TO CART ---
             elif "amazon" in url.lower():
                 try:
                     add_tracker_log("🔍 Amazon: Looking for 'Add to Cart' button...")
@@ -605,7 +607,6 @@ async def trigger_add_to_cart(url: str, source_site: str):
                 except Exception as e:
                     add_tracker_log(f"⚠️ Amazon 'Add to Cart' error: {e}", is_error=True)
             
-            # Cart me add hone ke baad 10 second ruk kar browser band kar dena
             add_tracker_log("⏳ Product successfully processed. Closing browser in 10 seconds...")
             await asyncio.sleep(10)
             await browser.close()
@@ -624,7 +625,6 @@ def fetch_live_price(url: str) -> Optional[float]:
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, 'html.parser')
             
-            # 1. JSON-LD Schema data check karein (Return pure float)
             for script in soup.find_all('script', type='application/ld+json'):
                 try:
                     data = json.loads(script.string)
@@ -641,7 +641,6 @@ def fetch_live_price(url: str) -> Optional[float]:
                 except:
                     pass
 
-            # 2. Meta tags check karein
             price_meta = soup.find('meta', property='product:price:amount') or soup.find('meta', property='og:price:amount')
             if price_meta and price_meta.get('content'):
                 try:
@@ -651,7 +650,6 @@ def fetch_live_price(url: str) -> Optional[float]:
                 except:
                     pass
 
-            # 3. Amazon ke liye .a-offscreen
             if "amazon" in url.lower():
                 offscreen_elem = soup.select_one(".a-price .a-offscreen")
                 if offscreen_elem:
@@ -662,7 +660,6 @@ def fetch_live_price(url: str) -> Optional[float]:
                         if val > 0:
                             return val
             
-            # 4. Flipkart aur baaki sites ke liye text regex
             text_content = soup.get_text()
             prices = re.findall(r'(?:₹|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)', text_content, re.IGNORECASE)
             if prices:
@@ -680,7 +677,7 @@ def fetch_live_price(url: str) -> Optional[float]:
     except Exception as e:
         print(f"Error fetching live price for {url}: {e}")
     return None
-# Background Thread jo saare watchlist items ko track karega
+
 def price_tracker_worker():
     global WATCHED_ITEMS
     while True:
@@ -697,11 +694,9 @@ def price_tracker_worker():
                 title, url, old_price, target_price = row
                 target_price = target_price if target_price is not None else 0.0
                 
-                # price_val ab ek float number ya None hoga
                 price_val = fetch_live_price(url)
                 current_price_str = f"₹{price_val:,.0f}" if price_val is not None else old_price
                 
-                # Database update
                 conn = get_db_connection()
                 cursor = conn.cursor()
                 cursor.execute("""
@@ -710,7 +705,6 @@ def price_tracker_worker():
                 conn.commit()
                 conn.close()
                 
-                # Target price check (Ab price_val float hai, toh comparison safely hoga)
                 if price_val is not None and target_price > 0 and price_val <= target_price:
                     alert_msg = (
                         f"🚨🎯 **TARGET PRICE REACHED! ADDING TO CART!** 🎯🚨\n\n"
@@ -720,7 +714,6 @@ def price_tracker_worker():
                         f"🔗 {url}"
                     )
                     
-                    # Telegram Alert + Add to Cart Trigger
                     if DESTINATION:
                         try:
                             loop = asyncio.new_event_loop()
@@ -747,7 +740,6 @@ def price_tracker_worker():
             add_tracker_log(f"Error in price tracker worker: {str(e)}", is_error=True)
             
         time.sleep(300)
-Isse update karne ke baad script ko restart kar dein, ab price fetching aur formatting bilkul smooth kaam karegi!
         
 async def process_message(event):
     chat = await event.get_chat()
