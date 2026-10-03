@@ -666,15 +666,15 @@ logging.basicConfig(
 logger = logging.getLogger("AddToCartDebugger")
 
 def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float):
-    logger.info(f"🛒 [START] Automation initiated for Product: {title}")
-    logger.info(f"🔗 Target URL: {url}")
+    logger.info(f"🛒 [CART-STEP 1] Automation initiated for Product: {title}")
+    logger.info(f"🔗 [CART-STEP 2] Target URL: {url}")
     
     success = False
     browser = None
     
     try:
         with sync_playwright() as p:
-            logger.info("🌐 Launching Chromium browser (Headless=True with Sandbox flags)...")
+            logger.info("🛒 [CART-STEP 3] Launching Chromium browser (Headless=True)...")
             
             browser = p.chromium.launch(
                 headless=True,
@@ -693,13 +693,13 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
             )
             
             page = context.new_page()
-            logger.info("📄 Navigating to product page...")
+            logger.info("🛒 [CART-STEP 4] Navigating to product page...")
             page.goto(url, timeout=60000, wait_until="domcontentloaded")
             
             time.sleep(4)
             
             if "amazon" in url.lower():
-                logger.info("🔍 [Amazon] Searching for 'Add to Cart' button selectors...")
+                logger.info("🛒 [CART-STEP 5A] [Amazon] Searching for 'Add to Cart' selectors...")
                 selectors = [
                     "#add-to-cart-button", 
                     "input#add-to-cart-button", 
@@ -717,14 +717,10 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
                     except Exception as err:
                         logger.debug(f"Selector {sel} not interactive: {err}")
                         continue
-                
-                if not clicked:
-                    logger.error("❌ [Amazon] Add to Cart button could not be found.")
-                else:
-                    success = True
+                success = clicked
 
             elif "flipkart" in url.lower():
-                logger.info("🔍 [Flipkart] Searching for 'Add to Cart' button selectors...")
+                logger.info("🛒 [CART-STEP 5B] [Flipkart] Searching for 'Add to Cart' selectors...")
                 selectors = [
                     "button:has-text('Add to Cart')", 
                     "button:has-text('ADD TO CART')", 
@@ -742,15 +738,13 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
                     except Exception as err:
                         logger.debug(f"Selector {sel} not interactive: {err}")
                         continue
-                
-                if not clicked:
-                    logger.error("❌ [Flipkart] Add to Cart button not found.")
-                else:
-                    success = True
+                success = clicked
+
             else:
-                logger.info("🔍 [Generic] Searching general cart buttons...")
+                logger.info("🛒 [CART-STEP 5C] [Generic/Quick Commerce] Searching for cart buttons...")
                 try:
-                    cart_btn = page.wait_for_selector("button:has-text('Add to Cart'), button:has-text('Add to Bag')", timeout=8000)
+                    # Yahan 'ADD' button bhi add kar diya hai quick commerce ke liye
+                    cart_btn = page.wait_for_selector("button:has-text('Add to Cart'), button:has-text('Add to Bag'), button:has-text('ADD')", timeout=8000)
                     if cart_btn:
                         cart_btn.click()
                         logger.info("✅ [Generic] Clicked cart button successfully!")
@@ -761,10 +755,10 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
             time.sleep(5)
             if browser:
                 browser.close()
-            logger.info("🔒 Browser session closed gracefully.")
+            logger.info("🛒 [CART-STEP 6] Browser session closed gracefully.")
             
     except Exception as e:
-        logger.error(f"❌ [FATAL ERROR] Playwright crash or exception: {str(e)}", exc_info=True)
+        logger.error(f"❌ [CART-FATAL ERROR] Playwright crashed: {str(e)}", exc_info=True)
         if browser:
             try:
                 browser.close()
@@ -772,6 +766,7 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
                 pass
 
     if success:
+        logger.info("🛒 [DB-STEP 7] Cart click was successful, updating database...")
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
@@ -788,7 +783,7 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
             logger.error(f"❌ [DB ERROR] Failed to update database after cart click: {db_err}")
     else:
         logger.warning(f"⚠️ [FAILED] Automation finished with success=False for: {title}. Item remains in watchlist.")
-
+        
 def fetch_live_price(url: str) -> Optional[float]:
     try:
         headers = {
@@ -880,7 +875,7 @@ def price_tracker_worker():
                 conn.close()
                 
                 add_tracker_log(f"🟢 DEBUG -> Price: {price_val} | Target: {target_price} | DESTINATION: '{DESTINATION}'")
-                
+
                 if price_val is not None and target_price > 0 and price_val <= target_price:
                     add_tracker_log(f"🟢 DEBUG: IF condition matched! Price ({price_val}) <= Target ({target_price})")
                     alert_msg = (
