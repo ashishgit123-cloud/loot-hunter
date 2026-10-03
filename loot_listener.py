@@ -893,10 +893,12 @@ def price_tracker_worker():
                     
                     if DESTINATION:
                         try:
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                            loop.run_until_complete(client.send_message(DESTINATION, alert_msg))
-                            loop.close()
+                            # Main application ke running event loop mein task schedule karein safely
+                            future = asyncio.run_coroutine_threadsafe(
+                                client.send_message(DESTINATION, alert_msg), 
+                                client.loop
+                            )
+                            future.result(timeout=10) # 10 seconds timeout
                         except Exception as ex:
                             add_tracker_log(f"Failed to send Telegram alert: {ex}", is_error=True)
 
