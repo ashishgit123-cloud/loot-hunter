@@ -850,7 +850,7 @@ def fetch_live_price(url: str) -> Optional[float]:
         print(f"Error fetching live price for {url}: {e}")
         
     return None
-    
+
 def price_tracker_worker():
     global WATCHED_ITEMS, CART_ITEMS
     while True:
@@ -897,7 +897,14 @@ def price_tracker_worker():
 
                     try:
                         add_tracker_log("add to card process to be started")
-                        trigger_add_to_cart(url, "e-commerce", title, price_val)
+                        
+                        # Is tarah se background thread mein alag se trigger karein taaki main tracker block na ho:
+                          cart_thread = threading.Thread(
+                          target=trigger_add_to_cart, 
+                            args=(url, "e-commerce", title, price_val)
+                              )
+                     cart_thread.start()
+                        
                     except Exception as ex:
                         add_tracker_log(f"Failed to run add-to-cart automation: {ex}", is_error=True)
 
