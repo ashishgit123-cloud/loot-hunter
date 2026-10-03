@@ -100,16 +100,22 @@ def extract_price_from_text(text: str) -> Optional[float]:
     """
     Extracts deal price from raw Telegram message text or titles.
     - Ignores percentages (e.g., 80% off, upto 50%).
+    - Ignores cash discounts/off amounts (e.g., 17,250 off, save ₹5000).
     - Handles currency patterns like ₹629, Rs. 629, @4999, 4,999/-
     """
     if not text:
         return None
 
-    # 1. Clean up percentage / discount clauses first so they don't get matched as prices
+    # 1. Clean up percentage discount clauses
     cleaned_text = re.sub(r'\d+\s*%\s*(?:off|discount)?', '', text, flags=re.IGNORECASE)
     cleaned_text = re.sub(r'(?:upto|flat|save|min|max|extra)\s*\d+\s*%', '', cleaned_text, flags=re.IGNORECASE)
 
-    # 2. Match strict currency/price patterns
+    # 2. Clean up cash discount/off phrases so they aren't mistakenly picked as product price
+    # e.g., "17,250 off", "save ₹5000", "₹2000 discount", "discount of 500"
+    cleaned_text = re.sub(r'(?:off|discount|save|saving|cashback)\b[^,.\n]*?(?:₹|Rs\.?|INR)?\s*[\d,]+(?:\.\d+)?', '', cleaned_text, flags=re.IGNORECASE)
+    cleaned_text = re.sub(r'(?:₹|Rs\.?|INR)?\s*[\d,]+(?:\.\d+)?\b[^,.\n]*?(?:off|discount|saving|cashback)', '', cleaned_text, flags=re.IGNORECASE)
+
+    # 3. Match strict currency/price patterns for actual selling price
     patterns = [
         r"(?:₹|Rs\.?|INR)\s*(?P<p>[\d,]+(?:\.\d+)?)(?=\b|\s|$)",
         r"@\s*(?P<p>[\d,]+(?:\.\d+)?)",
@@ -127,8 +133,7 @@ def extract_price_from_text(text: str) -> Optional[float]:
             except ValueError:
                 continue
 
-    return clean_price(cleaned_text)
-
+    return clean_price(cleaned_text)    
 
 def get_offer_price(text: str, url: Optional[str] = None) -> Optional[float]:
     """
