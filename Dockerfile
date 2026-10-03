@@ -1,5 +1,8 @@
 FROM python:3.13-slim
 
+# Logs ko turant screen par dikhane ke liye yeh zaroori hai
+ENV PYTHONUNBUFFERED=1
+
 # System-level dependencies install karein taaki Playwright kabhi crash na ho
 RUN apt-get update && apt-get install -y \
     libglib2.0-0 libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 \
