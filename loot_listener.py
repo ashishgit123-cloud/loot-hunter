@@ -26,6 +26,7 @@ from groq import Groq
 import requests
 from bs4 import BeautifulSoup
 import psycopg2
+from curl_cffi import requests as curl_requests
 
 # Suppress Flask/Werkzeug HTTP access logs
 werkzeug_logger = logging.getLogger('werkzeug')
@@ -783,68 +784,24 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
             logger.error(f"❌ [DB ERROR] Failed to update database after cart click: {db_err}")
     else:
         logger.warning(f"⚠️ [FAILED] Automation finished with success=False for: {title}. Item remains in watchlist.")
-        
-def fetch_live_price(url: str) -> Optional[float]:
+
+def fetch_live_price(url):
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept-Language": "en-US,en;q=0.9,hi;q=0.8"
-        }
-        resp = requests.get(url, headers=headers, timeout=8)
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, 'html.parser')
+        # 'impersonate="chrome"' lagane se Amazon/Flipkart block nahi karenge
+        response = curl_requests.get(url, impersonate="chrome", timeout=15)
+        
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
             
-            for script in soup.find_all('script', type='application/ld+json'):
-                try:
-                    data = json.loads(script.string)
-                    if isinstance(data, list):
-                        data = data[0]
-                    if isinstance(data, dict):
-                        offers = data.get('offers')
-                        if isinstance(offers, dict):
-                            p = offers.get('price') or offers.get('lowPrice')
-                            if p:
-                                val = float(str(p).replace(',', ''))
-                                if val > 0:
-                                    return val
-                except:
-                    pass
-
-            price_meta = soup.find('meta', property='product:price:amount') or soup.find('meta', property='og:price:amount')
-            if price_meta and price_meta.get('content'):
-                try:
-                    val = float(price_meta['content'])
-                    if val > 0:
-                        return val
-                except:
-                    pass
-
-            if "amazon" in url.lower():
-                offscreen_elem = soup.select_one(".a-price .a-offscreen")
-                if offscreen_elem:
-                    price_text = offscreen_elem.get_text()
-                    cleaned = re.sub(r'[^\d.]', '', price_text)
-                    if cleaned:
-                        val = float(cleaned)
-                        if val > 0:
-                            return val
+            # Yahan aapka apna selector hoga jo price nikalta hai (jaise Flipkart/Amazon ke liye)
+            # Example ke liye yahan price parse karne ka logic aayega:
+            # price_text = soup.select_one("YOUR_PRICE_SELECTOR").text
+            # price_val = float(price_text.replace("₹", "").replace(",", "").strip())
+            # return price_val
             
-            text_content = soup.get_text()
-            prices = re.findall(r'(?:₹|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)', text_content, re.IGNORECASE)
-            if prices:
-                cleaned_prices = []
-                for p in prices:
-                    try:
-                        val = float(p.replace(',', ''))
-                        if val > 50:
-                            cleaned_prices.append(val)
-                    except:
-                        continue
-                if cleaned_prices:
-                    return float(min(cleaned_prices))
-                    
     except Exception as e:
-        print(f"Error fetching live price for {url}: {e}")
+        logger.error(f"❌ Error fetching price with curl_cffi: {e}")
+        
     return None
 
 def price_tracker_worker():
