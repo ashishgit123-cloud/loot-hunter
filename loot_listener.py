@@ -9,8 +9,8 @@ import logging
 import json
 import io
 import csv
-import logging
 import sys
+import queue
 from playwright.sync_api import sync_playwright
 from collections import OrderedDict, deque
 from typing import Optional
@@ -26,7 +26,6 @@ from groq import Groq
 import requests
 from bs4 import BeautifulSoup
 import psycopg2
-from playwright.sync_api import sync_playwright
 
 # Suppress Flask/Werkzeug HTTP access logs
 werkzeug_logger = logging.getLogger('werkzeug')
@@ -66,6 +65,9 @@ if not DATABASE_URL:
 
 client = TelegramClient(StringSession(TG_SESSION), API_ID, API_HASH)
 sem = asyncio.Semaphore(MAX_CONCURRENCY)
+
+# Thread-safe queue for background Telegram alerts
+telegram_alert_queue = queue.Queue()
 
 seen = OrderedDict()
 DEAL_TTL_SECONDS = 7 * 24 * 60 * 60
@@ -374,7 +376,6 @@ def add_watchlist():
     except Exception as e:
         print(f"Title scrape error: {e}")
 
-    # Fallback to URL slug if scraping blocked or empty
     if not product_title or product_title == "Watched Product" or len(product_title) < 3:
         parts = [p for p in url.split('/') if p and p not in ('https:', 'http:', 'www.amazon.in', 'www.flipkart.com', 'dl.flipkart.com', 'dp', 'gp', 'p', 's')]
         if parts:
@@ -675,7 +676,6 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
         with sync_playwright() as p:
             logger.info("🌐 Launching Chromium browser (Headless=True with Sandbox flags)...")
             
-            # Crucial flags for Railway / Linux cloud servers
             browser = p.chromium.launch(
                 headless=True,
                 args=[
@@ -696,10 +696,8 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
             logger.info("📄 Navigating to product page...")
             page.goto(url, timeout=60000, wait_until="domcontentloaded")
             
-            # Wait for anti-bot challenge or page stabilization
             time.sleep(4)
             
-            # Check for Amazon
             if "amazon" in url.lower():
                 logger.info("🔍 [Amazon] Searching for 'Add to Cart' button selectors...")
                 selectors = [
@@ -721,11 +719,10 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
                         continue
                 
                 if not clicked:
-                    logger.error("❌ [Amazon] Add to Cart button could not be found. Possible causes: Captcha, Login required, or Out of Stock.")
+                    logger.error("❌ [Amazon] Add to Cart button could not be found.")
                 else:
                     success = True
 
-            # Check for Flipkart
             elif "flipkart" in url.lower():
                 logger.info("🔍 [Flipkart] Searching for 'Add to Cart' button selectors...")
                 selectors = [
@@ -747,7 +744,7 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
                         continue
                 
                 if not clicked:
-                    logger.error("❌ [Flipkart] Add to Cart button not found. Possible login or layout change.")
+                    logger.error("❌ [Flipkart] Add to Cart button not found.")
                 else:
                     success = True
             else:
@@ -892,15 +889,9 @@ def price_tracker_worker():
                     )
                     
                     if DESTINATION:
-                        try:
-                            # Main application ke running event loop mein task schedule karein safely
-                            future = asyncio.run_coroutine_threadsafe(
-                                client.send_message(DESTINATION, alert_msg), 
-                                client.loop
-                            )
-                            future.result(timeout=10) # 10 seconds timeout
-                        except Exception as ex:
-                            add_tracker_log(f"Failed to send Telegram alert: {ex}", is_error=True)
+                        # Thread-safe queue mein alert daal rahe hain (No loop error)
+                        telegram_alert_queue.put(alert_msg)
+                        add_tracker_log("Target price reached! Alert queued for Telegram.")
 
                     try:
                         trigger_add_to_cart(url, "e-commerce", title, price_val)
@@ -924,7 +915,19 @@ def price_tracker_worker():
             add_tracker_log(f"Error in price tracker worker: {str(e)}", is_error=True)
             
         time.sleep(300)
-        
+
+async def process_telegram_alerts():
+    """Main event loop ka task jo queue se alerts utha kar securely bhejega"""
+    while True:
+        try:
+            if not telegram_alert_queue.empty():
+                msg = telegram_alert_queue.get_nowait()
+                if DESTINATION:
+                    await client.send_message(DESTINATION, msg)
+        except Exception as e:
+            print(f"Telegram queue consumer error: {e}")
+        await asyncio.sleep(1)
+
 async def process_message(event):
     chat = await event.get_chat()
     chat_identifier = getattr(chat, "username", None) or str(chat.id)
@@ -1073,6 +1076,10 @@ async def main():
     await tracker_log("Live Price Tracker worker spawned in parallel background loop.")
 
     await client.start()
+    
+    # Start the queue consumer task in the main event loop
+    asyncio.create_task(process_telegram_alerts())
+
     me = await client.get_me()
     await log(f"Started v{VERSION} as @{getattr(me, 'username', None) or me.first_name}")
     await discover()
