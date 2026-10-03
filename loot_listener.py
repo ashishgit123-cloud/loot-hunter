@@ -895,17 +895,15 @@ def price_tracker_worker():
                         telegram_alert_queue.put(alert_msg)
                         add_tracker_log("Target price reached! Alert queued for Telegram.")
 
-                    try:
-                        add_tracker_log("add to card process to be started")
-                        
-                        # Is tarah se background thread mein alag se trigger karein taaki main tracker block na ho:
-                          cart_thread = threading.Thread(
-                          target=trigger_add_to_cart, 
-                            args=(url, "e-commerce", title, price_val)
-                              )
-                     cart_thread.start()
-                        
-                    except Exception as ex:
+                 try:
+                add_tracker_log("🚀 [DEBUG] Spawning cart thread...")
+                cart_thread = threading.Thread(
+                    target=trigger_add_to_cart, 
+                    args=(url, "e-commerce", title, price_val)
+                )
+                cart_thread.start()
+                add_tracker_log("✅ [DEBUG] Cart thread started successfully.")
+                except Exception as ex:
                         add_tracker_log(f"Failed to run add-to-cart automation: {ex}", is_error=True)
 
                 updated_watched_list.append({
