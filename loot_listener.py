@@ -785,25 +785,72 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
     else:
         logger.warning(f"⚠️ [FAILED] Automation finished with success=False for: {title}. Item remains in watchlist.")
 
-def fetch_live_price(url):
+def fetch_live_price(url: str) -> Optional[float]:
     try:
-        # 'impersonate="chrome"' lagane se Amazon/Flipkart block nahi karenge
-        response = curl_requests.get(url, impersonate="chrome", timeout=15)
+        # curl_cffi use karne se Flipkart/Amazon block nahi karenge
+        resp = curl_requests.get(url, impersonate="chrome", timeout=12)
         
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, 'html.parser')
             
-            # Yahan aapka apna selector hoga jo price nikalta hai (jaise Flipkart/Amazon ke liye)
-            # Example ke liye yahan price parse karne ka logic aayega:
-            # price_text = soup.select_one("YOUR_PRICE_SELECTOR").text
-            # price_val = float(price_text.replace("₹", "").replace(",", "").strip())
-            # return price_val
+            # 1. JSON-LD Schema check
+            for script in soup.find_all('script', type='application/ld+json'):
+                try:
+                    data = json.loads(script.string)
+                    if isinstance(data, list):
+                        data = data[0]
+                    if isinstance(data, dict):
+                        offers = data.get('offers')
+                        if isinstance(offers, dict):
+                            p = offers.get('price') or offers.get('lowPrice')
+                            if p:
+                                val = float(str(p).replace(',', ''))
+                                if val > 0:
+                                    return val
+                except:
+                    pass
+
+            # 2. Meta Tags check
+            price_meta = soup.find('meta', property='product:price:amount') or soup.find('meta', property='og:price:amount')
+            if price_meta and price_meta.get('content'):
+                try:
+                    val = float(price_meta['content'])
+                    if val > 0:
+                        return val
+                except:
+                    pass
+
+            # 3. Amazon specific selector check
+            if "amazon" in url.lower():
+                offscreen_elem = soup.select_one(".a-price .a-offscreen")
+                if offscreen_elem:
+                    price_text = offscreen_elem.get_text()
+                    cleaned = re.sub(r'[^\d.]', '', price_text)
+                    if cleaned:
+                        val = float(cleaned)
+                        if val > 0:
+                            return val
             
+            # 4. Fallback Text Search (Fixed: Removed '> 50' filter so ₹15 is accepted!)
+            text_content = soup.get_text()
+            prices = re.findall(r'(?:₹|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)', text_content, re.IGNORECASE)
+            if prices:
+                cleaned_prices = []
+                for p in prices:
+                    try:
+                        val = float(p.replace(',', ''))
+                        if val > 0:  # 👈 Yahan pehle 50 tha, ab 0 kar diya hai taaki chote prices bhi catch hon!
+                            cleaned_prices.append(val)
+                    except:
+                        continue
+                if cleaned_prices:
+                    return float(min(cleaned_prices))
+                    
     except Exception as e:
-        logger.error(f"❌ Error fetching price with curl_cffi: {e}")
+        print(f"Error fetching live price for {url}: {e}")
         
     return None
-
+    
 def price_tracker_worker():
     global WATCHED_ITEMS, CART_ITEMS
     while True:
