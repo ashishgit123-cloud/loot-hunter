@@ -891,19 +891,19 @@ def price_tracker_worker():
                     )
                     
                     if DESTINATION:
-                        # Thread-safe queue mein alert daal rahe hain (No loop error)
+                        # Thread-safe queue mein alert daal rahe hain
                         telegram_alert_queue.put(alert_msg)
                         add_tracker_log("Target price reached! Alert queued for Telegram.")
 
-                 try:
-                add_tracker_log("🚀 [DEBUG] Spawning cart thread...")
-                cart_thread = threading.Thread(
-                    target=trigger_add_to_cart, 
-                    args=(url, "e-commerce", title, price_val)
-                )
-                cart_thread.start()
-                add_tracker_log("✅ [DEBUG] Cart thread started successfully.")
-                except Exception as ex:
+                    try:
+                        add_tracker_log("🚀 [DEBUG] Spawning cart thread...")
+                        cart_thread = threading.Thread(
+                            target=trigger_add_to_cart, 
+                            args=(url, "e-commerce", title, price_val)
+                        )
+                        cart_thread.start()
+                        add_tracker_log("✅ [DEBUG] Cart thread started successfully.")
+                    except Exception as ex:
                         add_tracker_log(f"Failed to run add-to-cart automation: {ex}", is_error=True)
 
                 updated_watched_list.append({
@@ -922,7 +922,7 @@ def price_tracker_worker():
         except Exception as e:
             add_tracker_log(f"Error in price tracker worker: {str(e)}", is_error=True)
             
-        time.sleep(300)
+        time.sleep(120)
 
 async def process_telegram_alerts():
     """Main event loop ka task jo queue se alerts utha kar securely bhejega"""
