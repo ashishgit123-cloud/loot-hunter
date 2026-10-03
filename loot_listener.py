@@ -879,7 +879,10 @@ def price_tracker_worker():
                 conn.commit()
                 conn.close()
                 
+                add_tracker_log(f"🟢 DEBUG -> Price: {price_val} | Target: {target_price} | DESTINATION: '{DESTINATION}'")
+                
                 if price_val is not None and target_price > 0 and price_val <= target_price:
+                    add_tracker_log(f"🟢 DEBUG: IF condition matched! Price ({price_val}) <= Target ({target_price})")
                     alert_msg = (
                         f"🚨🎯 **TARGET PRICE REACHED! ADDING TO CART!** 🎯🚨\n\n"
                         f"📦 **{title}**\n"
@@ -894,6 +897,7 @@ def price_tracker_worker():
                         add_tracker_log("Target price reached! Alert queued for Telegram.")
 
                     try:
+                        add_tracker_log("add to card process to be started")
                         trigger_add_to_cart(url, "e-commerce", title, price_val)
                     except Exception as ex:
                         add_tracker_log(f"Failed to run add-to-cart automation: {ex}", is_error=True)
