@@ -720,10 +720,9 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
                         continue
                 success = clicked
 
-       elif "flipkart" in url.lower():
+            elif "flipkart" in url.lower():
                 logger.info("🛒 [CART-STEP 5B] [Flipkart] Searching for 'Add to Cart' selectors...")
                 
-                # Pehle thoda page scroll karein taaki button load ho jaye
                 try:
                     page.evaluate("window.scrollBy(0, 400)")
                     time.sleep(1)
@@ -743,7 +742,6 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
                 clicked = False
                 for sel in selectors:
                     try:
-                        # Element ke visible hone ka wait karein aur scroll into view karein
                         element = page.locator(sel).first
                         if element.is_visible(timeout=3000):
                             element.scroll_into_view_if_needed()
@@ -759,7 +757,6 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
             else:
                 logger.info("🛒 [CART-STEP 5C] [Generic/Quick Commerce] Searching for cart buttons...")
                 try:
-                    # Yahan 'ADD' button bhi add kar diya hai quick commerce ke liye
                     cart_btn = page.wait_for_selector("button:has-text('Add to Cart'), button:has-text('Add to Bag'), button:has-text('ADD')", timeout=8000)
                     if cart_btn:
                         cart_btn.click()
@@ -802,13 +799,11 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
 
 def fetch_live_price(url: str) -> Optional[float]:
     try:
-        # curl_cffi use karne se Flipkart/Amazon block nahi karenge
         resp = curl_requests.get(url, impersonate="chrome", timeout=12)
         
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, 'html.parser')
             
-            # 1. JSON-LD Schema check
             for script in soup.find_all('script', type='application/ld+json'):
                 try:
                     data = json.loads(script.string)
@@ -825,7 +820,6 @@ def fetch_live_price(url: str) -> Optional[float]:
                 except:
                     pass
 
-            # 2. Meta Tags check
             price_meta = soup.find('meta', property='product:price:amount') or soup.find('meta', property='og:price:amount')
             if price_meta and price_meta.get('content'):
                 try:
@@ -835,7 +829,6 @@ def fetch_live_price(url: str) -> Optional[float]:
                 except:
                     pass
 
-            # 3. Amazon specific selector check
             if "amazon" in url.lower():
                 offscreen_elem = soup.select_one(".a-price .a-offscreen")
                 if offscreen_elem:
@@ -846,7 +839,6 @@ def fetch_live_price(url: str) -> Optional[float]:
                         if val > 0:
                             return val
             
-            # 4. Fallback Text Search (Fixed: Removed '> 50' filter so ₹15 is accepted!)
             text_content = soup.get_text()
             prices = re.findall(r'(?:₹|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)', text_content, re.IGNORECASE)
             if prices:
@@ -854,7 +846,7 @@ def fetch_live_price(url: str) -> Optional[float]:
                 for p in prices:
                     try:
                         val = float(p.replace(',', ''))
-                        if val > 0:  # 👈 Yahan pehle 50 tha, ab 0 kar diya hai taaki chote prices bhi catch hon!
+                        if val > 0:
                             cleaned_prices.append(val)
                     except:
                         continue
@@ -906,7 +898,6 @@ def price_tracker_worker():
                     )
                     
                     if DESTINATION:
-                        # Thread-safe queue mein alert daal rahe hain
                         telegram_alert_queue.put(alert_msg)
                         add_tracker_log("Target price reached! Alert queued for Telegram.")
 
@@ -940,7 +931,6 @@ def price_tracker_worker():
         time.sleep(120)
 
 async def process_telegram_alerts():
-    """Main event loop ka task jo queue se alerts utha kar securely bhejega"""
     while True:
         try:
             if not telegram_alert_queue.empty():
@@ -1100,7 +1090,6 @@ async def main():
 
     await client.start()
     
-    # Start the queue consumer task in the main event loop
     asyncio.create_task(process_telegram_alerts())
 
     me = await client.get_me()
