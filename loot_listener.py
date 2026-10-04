@@ -720,20 +720,35 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
                         continue
                 success = clicked
 
-            elif "flipkart" in url.lower():
+       elif "flipkart" in url.lower():
                 logger.info("🛒 [CART-STEP 5B] [Flipkart] Searching for 'Add to Cart' selectors...")
+                
+                # Pehle thoda page scroll karein taaki button load ho jaye
+                try:
+                    page.evaluate("window.scrollBy(0, 400)")
+                    time.sleep(1)
+                except:
+                    pass
+
                 selectors = [
-                    "button:has-text('Add to Cart')", 
-                    "button:has-text('ADD TO CART')", 
-                    "button._2KpZ6l._3AWRsL._3vhnxf",
-                    "button.QqFHMw.vslbG+._3Yh_Is"
+                    "text=Add to Cart",
+                    "text=ADD TO CART",
+                    "button:has-text('Add to Cart')",
+                    "button:has-text('ADD TO CART')",
+                    "div:has-text('Add to Cart')",
+                    "._2KpZ6l._3AWRsL._3vhnxf",
+                    ".QqFHMw.vslbG+"
                 ]
+                
                 clicked = False
                 for sel in selectors:
                     try:
-                        if page.is_visible(sel, timeout=4000):
-                            page.click(sel, timeout=4000)
-                            logger.info(f"✅ [Flipkart] Successfully clicked using selector: {sel}")
+                        # Element ke visible hone ka wait karein aur scroll into view karein
+                        element = page.locator(sel).first
+                        if element.is_visible(timeout=3000):
+                            element.scroll_into_view_if_needed()
+                            element.click(timeout=3000)
+                            logger.info(f"✅ [Flipkart] Successfully clicked using selector/text: {sel}")
                             clicked = True
                             break
                     except Exception as err:
