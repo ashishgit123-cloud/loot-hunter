@@ -833,77 +833,84 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
 
 def fetch_live_price(url: str) -> Optional[float]:
     try:
-        resp = curl_requests.get(url, impersonate="chrome", timeout=12)
+        # Custom headers define karein jo ek real browser bhejta hai
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Referer": "https://www.google.com/"
+        }
         
-        # Status code log karein aur HTML page save karein debugging ke liye
+        # headers ko yahan pass karein
+        resp = curl_requests.get(url, impersonate="chrome", headers=headers, timeout=12)
+        
         logger.info(f"🔍 [PRICE FETCH] URL: {url} | Status Code: {resp.status_code}")
         
-        debug_filename = "page_debug.html"
-        with open(debug_filename, "w", encoding="utf-8") as f:
-            f.write(resp.text)
+        if resp.status_code == 529:
+            logger.warning(f"⚠️ [BLOCKED/OVERLOAD] Server returned 529 (Rate Limited/Overloaded) for {url}")
+            return None
             
-        try:
-            telegram_photo_queue.put((debug_filename, f"📄 HTML Debug File for: {url} | Status: {resp.status_code}"))
-        except Exception:
-            pass
+        if resp.status_code != 200:
+            logger.warning(f"⚠️ Failed to fetch price, non-200 status code: {resp.status_code}")
+            return None
+            
+        soup = BeautifulSoup(resp.text, 'html.parser')
         
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            
-            for script in soup.find_all('script', type='application/ld+json'):
-                try:
-                    data = json.loads(script.string)
-                    if isinstance(data, list):
-                        data = data[0]
-                    if isinstance(data, dict):
-                        offers = data.get('offers')
-                        if isinstance(offers, dict):
-                            p = offers.get('price') or offers.get('lowPrice')
-                            if p:
-                                val = float(str(p).replace(',', ''))
-                                if val > 0:
-                                    return val
-                except:
-                    pass
+        # Baaki parsing logic waisi hi rahegi...
+        for script in soup.find_all('script', type='application/ld+json'):
+            try:
+                data = json.loads(script.string)
+                if isinstance(data, list):
+                    data = data[0]
+                if isinstance(data, dict):
+                    offers = data.get('offers')
+                    if isinstance(offers, dict):
+                        p = offers.get('price') or offers.get('lowPrice')
+                        if p:
+                            val = float(str(p).replace(',', ''))
+                            if val > 0:
+                                return val
+            except:
+                pass
 
-            price_meta = soup.find('meta', property='product:price:amount') or soup.find('meta', property='og:price:amount')
-            if price_meta and price_meta.get('content'):
-                try:
-                    val = float(price_meta['content'])
+        price_meta = soup.find('meta', property='product:price:amount') or soup.find('meta', property='og:price:amount')
+        if price_meta and price_meta.get('content'):
+            try:
+                val = float(price_meta['content'])
+                if val > 0:
+                    return val
+            except:
+                pass
+
+        if "amazon" in url.lower():
+            offscreen_elem = soup.select_one(".a-price .a-offscreen")
+            if offscreen_elem:
+                price_text = offscreen_elem.get_text()
+                cleaned = re.sub(r'[^\d.]', '', price_text)
+                if cleaned:
+                    val = float(cleaned)
                     if val > 0:
                         return val
+        
+        text_content = soup.get_text()
+        prices = re.findall(r'(?:₹|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)', text_content, re.IGNORECASE)
+        if prices:
+            cleaned_prices = []
+            for p in prices:
+                try:
+                    val = float(p.replace(',', ''))
+                    if val > 0:
+                        cleaned_prices.append(val)
                 except:
-                    pass
-
-            if "amazon" in url.lower():
-                offscreen_elem = soup.select_one(".a-price .a-offscreen")
-                if offscreen_elem:
-                    price_text = offscreen_elem.get_text()
-                    cleaned = re.sub(r'[^\d.]', '', price_text)
-                    if cleaned:
-                        val = float(cleaned)
-                        if val > 0:
-                            return val
-            
-            text_content = soup.get_text()
-            prices = re.findall(r'(?:₹|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)', text_content, re.IGNORECASE)
-            if prices:
-                cleaned_prices = []
-                for p in prices:
-                    try:
-                        val = float(p.replace(',', ''))
-                        if val > 0:
-                            cleaned_prices.append(val)
-                    except:
-                        continue
-                if cleaned_prices:
-                    return float(min(cleaned_prices))
-                    
+                    continue
+            if cleaned_prices:
+                return float(min(cleaned_prices))
+                
     except Exception as e:
         print(f"Error fetching live price for {url}: {e}")
         
     return None
-
+    
 def price_tracker_worker():
     global WATCHED_ITEMS, CART_ITEMS
     while True:
