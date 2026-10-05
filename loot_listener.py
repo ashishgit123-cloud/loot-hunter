@@ -35,6 +35,8 @@ werkzeug_logger.setLevel(logging.ERROR)
 VERSION = "6.9.7"
 load_dotenv()
 
+telegram_photo_queue = queue.Queue()
+
 API_ID = int(os.getenv("TG_API_ID", "0"))
 API_HASH = os.getenv("TG_API_HASH", "")
 TG_SESSION = os.getenv("TG_SESSION", "")
@@ -901,7 +903,7 @@ def fetch_live_price(url: str) -> Optional[float]:
         print(f"Error fetching live price for {url}: {e}")
         
     return None
-    
+
 def price_tracker_worker():
     global WATCHED_ITEMS, CART_ITEMS
     while True:
