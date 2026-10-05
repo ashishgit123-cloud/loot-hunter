@@ -718,19 +718,30 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
                         logger.debug(f"Selector {sel} not interactive: {err}")
                         continue
                 success = clicked
-            
-            # Screenshot lein taaki pata chale screen par kya hai
-            try:
-                page.screenshot(path="cart_debug_screenshot.png")
-                logger.info("📸 [DEBUG] Screenshot saved as cart_debug_screenshot.png")
-            except Exception as sc_err:
-                logger.error(f"Failed to take screenshot: {sc_err}")
-
-            time.sleep(5)
 
             elif "flipkart" in url.lower():
                 logger.info("🛒 [CART-STEP 5B] [Flipkart] Searching for 'Add to Cart' selectors...")
                 
+                # Close any login/promo popups if they appear
+                try:
+                    close_btn = page.locator("button._2KpZ6l._2doB4z, button._2EdNRl, span._30XB9F").first
+                    if close_btn.is_visible(timeout=2000):
+                        close_btn.click()
+                        logger.info("✖ Closed Flipkart login/promo popup.")
+                except:
+                    pass
+
+                # Check and handle pincode if blocking
+                try:
+                    pincode_input = page.locator("input._3704LK, input[name='pincode']").first
+                    if pincode_input.is_visible(timeout=2000):
+                        pincode_input.fill("302028")
+                        page.keyboard.press("Enter")
+                        time.sleep(2)
+                        logger.info("📍 Entered default pincode for delivery check.")
+                except:
+                    pass
+
                 try:
                     page.evaluate("window.scrollBy(0, 400)")
                     time.sleep(1)
@@ -773,7 +784,15 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
                 except Exception as e:
                     logger.error(f"❌ [Generic] Cart button search failed: {e}")
             
-            time.sleep(5)
+            # Take debug screenshot to verify screen state
+            time.sleep(3)
+            try:
+                page.screenshot(path="cart_debug_screenshot.png")
+                logger.info("📸 [DEBUG] Screenshot saved as cart_debug_screenshot.png")
+            except Exception as sc_err:
+                logger.error(f"Failed to take screenshot: {sc_err}")
+
+            time.sleep(3)
             if context:
                 context.close()
             logger.info("🛒 [CART-STEP 6] Browser session closed gracefully.")
