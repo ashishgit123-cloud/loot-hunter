@@ -671,13 +671,15 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
     logger.info(f"🔗 [CART-STEP 2] Target URL: {url}")
     
     success = False
-    browser = None
+    context = None
     
     try:
         with sync_playwright() as p:
-            logger.info("🛒 [CART-STEP 3] Launching Chromium browser (Headless=True)...")
+            user_data_dir = "./chrome_profile"
+            logger.info(f"🛒 [CART-STEP 3] Launching Persistent Context with profile: {user_data_dir}")
             
-            browser = p.chromium.launch(
+            context = p.chromium.launch_persistent_context(
+                user_data_dir=user_data_dir,
                 headless=True,
                 args=[
                     "--disable-blink-features=AutomationControlled",
@@ -685,10 +687,7 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
                     "--disable-setuid-sandbox",
                     "--disable-dev-shm-usage",
                     "--disable-gpu"
-                ]
-            )
-            
-            context = browser.new_context(
+                ],
                 viewport={"width": 1280, "height": 800},
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
             )
@@ -766,15 +765,15 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
                     logger.error(f"❌ [Generic] Cart button search failed: {e}")
             
             time.sleep(5)
-            if browser:
-                browser.close()
+            if context:
+                context.close()
             logger.info("🛒 [CART-STEP 6] Browser session closed gracefully.")
             
     except Exception as e:
         logger.error(f"❌ [CART-FATAL ERROR] Playwright crashed: {str(e)}", exc_info=True)
-        if browser:
+        if context:
             try:
-                browser.close()
+                context.close()
             except:
                 pass
 
@@ -928,7 +927,7 @@ def price_tracker_worker():
         except Exception as e:
             add_tracker_log(f"Error in price tracker worker: {str(e)}", is_error=True)
             
-        time.sleep(120)
+        time.sleep(60)
 
 async def process_telegram_alerts():
     while True:
