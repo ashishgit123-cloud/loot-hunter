@@ -784,11 +784,16 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
                 except Exception as e:
                     logger.error(f"❌ [Generic] Cart button search failed: {e}")
             
-            # Take debug screenshot to verify screen state
+            # Take debug screenshot and send directly to Telegram queue
             time.sleep(3)
+            screenshot_path = "cart_debug_screenshot.png"
             try:
-                page.screenshot(path="cart_debug_screenshot.png")
-                logger.info("📸 [DEBUG] Screenshot saved as cart_debug_screenshot.png")
+                page.screenshot(path=screenshot_path)
+                logger.info("📸 [DEBUG] Screenshot saved.")
+                
+                # Queue mein daal dein taaki Telegram par photo mil jaye
+                caption_text = f"📸 **Cart Debug Screenshot**\n📦 {title}\n🔗 Success: {success}"
+                telegram_photo_queue.put((screenshot_path, caption_text))
             except Exception as sc_err:
                 logger.error(f"Failed to take screenshot: {sc_err}")
 
@@ -823,7 +828,7 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
             logger.error(f"❌ [DB ERROR] Failed to update database after cart click: {db_err}")
     else:
         logger.warning(f"⚠️ [FAILED] Automation finished with success=False for: {title}. Item remains in watchlist.")
-
+        
 def fetch_live_price(url: str) -> Optional[float]:
     try:
         resp = curl_requests.get(url, impersonate="chrome", timeout=12)
