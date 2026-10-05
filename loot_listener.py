@@ -983,10 +983,20 @@ async def process_telegram_alerts():
                 msg = telegram_alert_queue.get_nowait()
                 if DESTINATION:
                     await client.send_message(DESTINATION, msg)
+            
+            if not telegram_photo_queue.empty():
+                photo_path, caption = telegram_photo_queue.get_nowait()
+                target_chat = LOG_CHANNEL if LOG_CHANNEL else DESTINATION
+                if target_chat:
+                    try:
+                        await client.send_file(target_chat, photo_path, caption=caption)
+                        print(f"✅ Telegram photo sent successfully to {target_chat}")
+                    except Exception as send_err:
+                        print(f"❌ Telegram photo send FAILED: {send_err}")
         except Exception as e:
             print(f"Telegram queue consumer error: {e}")
         await asyncio.sleep(1)
-
+        
 async def process_message(event):
     chat = await event.get_chat()
     chat_identifier = getattr(chat, "username", None) or str(chat.id)
