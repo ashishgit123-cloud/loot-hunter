@@ -718,6 +718,15 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
                         logger.debug(f"Selector {sel} not interactive: {err}")
                         continue
                 success = clicked
+            
+            # Screenshot lein taaki pata chale screen par kya hai
+            try:
+                page.screenshot(path="cart_debug_screenshot.png")
+                logger.info("📸 [DEBUG] Screenshot saved as cart_debug_screenshot.png")
+            except Exception as sc_err:
+                logger.error(f"Failed to take screenshot: {sc_err}")
+
+            time.sleep(5)
 
             elif "flipkart" in url.lower():
                 logger.info("🛒 [CART-STEP 5B] [Flipkart] Searching for 'Add to Cart' selectors...")
