@@ -35,7 +35,6 @@ werkzeug_logger.setLevel(logging.ERROR)
 VERSION = "6.9.7"
 load_dotenv()
 
-telegram_photo_queue = queue.Queue()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
 API_HASH = os.getenv("TG_API_HASH", "")
@@ -71,6 +70,7 @@ sem = asyncio.Semaphore(MAX_CONCURRENCY)
 
 # Thread-safe queue for background Telegram alerts
 telegram_alert_queue = queue.Queue()
+telegram_photo_queue = queue.Queue()
 
 seen = OrderedDict()
 DEAL_TTL_SECONDS = 7 * 24 * 60 * 60
