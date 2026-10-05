@@ -828,10 +828,22 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
             logger.error(f"❌ [DB ERROR] Failed to update database after cart click: {db_err}")
     else:
         logger.warning(f"⚠️ [FAILED] Automation finished with success=False for: {title}. Item remains in watchlist.")
-        
+
 def fetch_live_price(url: str) -> Optional[float]:
     try:
         resp = curl_requests.get(url, impersonate="chrome", timeout=12)
+        
+        # Status code log karein aur HTML page save karein debugging ke liye
+        logger.info(f"🔍 [PRICE FETCH] URL: {url} | Status Code: {resp.status_code}")
+        
+        debug_filename = "page_debug.html"
+        with open(debug_filename, "w", encoding="utf-8") as f:
+            f.write(resp.text)
+            
+        try:
+            telegram_photo_queue.put((debug_filename, f"📄 HTML Debug File for: {url} | Status: {resp.status_code}"))
+        except Exception:
+            pass
         
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, 'html.parser')
@@ -889,7 +901,7 @@ def fetch_live_price(url: str) -> Optional[float]:
         print(f"Error fetching live price for {url}: {e}")
         
     return None
-
+    
 def price_tracker_worker():
     global WATCHED_ITEMS, CART_ITEMS
     while True:
