@@ -931,7 +931,8 @@ def fetch_live_price(url: str) -> Optional[float]:
                 return float(min(cleaned_prices))
                 
     except Exception as e:
-        print(f"Error fetching live price for {url}: {e}")
+        logger.error(f"❌ [BRIDGE FAILED] Could not fetch via bridge. Target: {target_fetch_url} | Error: {str(e)}")
+    return None
         
     return None
     
