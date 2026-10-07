@@ -834,11 +834,18 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
 
 def fetch_live_price(url: str) -> Optional[float]:
     try:
-        # Agar Railway par Bridge URL set hai, toh request laptop bridge ke through route hogi
-        target_fetch_url = url
+        # Affiliate tracker link ko resolve karke direct product URL banayein
+        from deal_sources import resolve_url, canonical_url
+        try:
+            res_url = resolve_url(url)
+            direct_url = canonical_url(res_url) if res_url else url
+        except Exception:
+            direct_url = url
+
+        target_fetch_url = direct_url
         if BRIDGE_URL:
-            target_fetch_url = f"{BRIDGE_URL}/get-data?url={url}"
-            logger.info(f"🌉 [BRIDGE ROUTE] Routing through Laptop Bridge for: {url}")
+            target_fetch_url = f"{BRIDGE_URL}/get-data?url={direct_url}"
+            logger.info(f"🌉 [BRIDGE ROUTE] Routing through Laptop Bridge for direct URL: {direct_url}")
         
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -847,22 +854,41 @@ def fetch_live_price(url: str) -> Optional[float]:
             "Referer": "https://www.google.com/"
         }
         
-        # Bridge ya direct requests.get call
         resp = requests.get(target_fetch_url, headers=headers, timeout=20)
         
-        logger.info(f"🔍 [PRICE FETCH] URL: {url} | Status Code: {resp.status_code}")
+        logger.info(f"🔍 [PRICE FETCH] URL: {direct_url} | Status Code: {resp.status_code}")
         
-        if resp.status_code == 529:
-            logger.warning(f"⚠️ [BLOCKED/OVERLOAD] Server returned 529 (Rate Limited/Overloaded) for {url}")
-            return None
-            
         if resp.status_code != 200:
             logger.warning(f"⚠️ Failed to fetch price, non-200 status code: {resp.status_code}")
             return None
             
         soup = BeautifulSoup(resp.text, 'html.parser')
         
-        # Baaki parsing logic waisi hi rahegi...
+        # 1. Flipkart Specific CSS Selectors
+        if "flipkart" in direct_url.lower():
+            for selector in [".Nx9bqj", "._30jeq3", "._16Jk6d", "._25b18c ._30jeq3"]:
+                elem = soup.select_one(selector)
+                if elem:
+                    cleaned = re.sub(r'[^\d.]', '', elem.get_text())
+                    if cleaned:
+                        try:
+                            val = float(cleaned)
+                            if val > 0:
+                                return val
+                        except:
+                            pass
+
+        # 2. Amazon Specific Selector
+        if "amazon" in direct_url.lower():
+            offscreen_elem = soup.select_one(".a-price .a-offscreen")
+            if offscreen_elem:
+                cleaned = re.sub(r'[^\d.]', '', offscreen_elem.get_text())
+                if cleaned:
+                    val = float(cleaned)
+                    if val > 0:
+                        return val
+
+        # 3. JSON-LD Structured Data Parsing
         for script in soup.find_all('script', type='application/ld+json'):
             try:
                 data = json.loads(script.string)
@@ -879,6 +905,7 @@ def fetch_live_price(url: str) -> Optional[float]:
             except:
                 pass
 
+        # 4. Meta Tags Fallback
         price_meta = soup.find('meta', property='product:price:amount') or soup.find('meta', property='og:price:amount')
         if price_meta and price_meta.get('content'):
             try:
@@ -887,17 +914,8 @@ def fetch_live_price(url: str) -> Optional[float]:
                     return val
             except:
                 pass
-
-        if "amazon" in url.lower():
-            offscreen_elem = soup.select_one(".a-price .a-offscreen")
-            if offscreen_elem:
-                price_text = offscreen_elem.get_text()
-                cleaned = re.sub(r'[^\d.]', '', price_text)
-                if cleaned:
-                    val = float(cleaned)
-                    if val > 0:
-                        return val
         
+        # 5. General Regex Fallback
         text_content = soup.get_text()
         prices = re.findall(r'(?:₹|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)', text_content, re.IGNORECASE)
         if prices:
@@ -916,7 +934,7 @@ def fetch_live_price(url: str) -> Optional[float]:
         print(f"Error fetching live price for {url}: {e}")
         
     return None
-
+    
 def price_tracker_worker():
     global WATCHED_ITEMS, CART_ITEMS
     while True:
