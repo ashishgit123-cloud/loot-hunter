@@ -42,6 +42,7 @@ TG_SESSION = os.getenv("TG_SESSION", "")
 DESTINATION = os.getenv("DESTINATION", "lootersAmer")
 LOG_CHANNEL = os.getenv("LOG_CHANNEL", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
+BRIDGE_URL = os.getenv("BRIDGE_URL", "")
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -833,7 +834,12 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
 
 def fetch_live_price(url: str) -> Optional[float]:
     try:
-        # Custom headers define karein jo ek real browser bhejta hai
+        # Agar Railway par Bridge URL set hai, toh request laptop bridge ke through route hogi
+        target_fetch_url = url
+        if BRIDGE_URL:
+            target_fetch_url = f"{BRIDGE_URL}/get-data?url={url}"
+            logger.info(f"🌉 [BRIDGE ROUTE] Routing through Laptop Bridge for: {url}")
+        
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             "Accept-Language": "en-US,en;q=0.9",
@@ -841,8 +847,8 @@ def fetch_live_price(url: str) -> Optional[float]:
             "Referer": "https://www.google.com/"
         }
         
-        # headers ko yahan pass karein
-        resp = curl_requests.get(url, impersonate="chrome", headers=headers, timeout=12)
+        # Bridge ya direct requests.get call
+        resp = requests.get(target_fetch_url, headers=headers, timeout=20)
         
         logger.info(f"🔍 [PRICE FETCH] URL: {url} | Status Code: {resp.status_code}")
         
@@ -910,7 +916,7 @@ def fetch_live_price(url: str) -> Optional[float]:
         print(f"Error fetching live price for {url}: {e}")
         
     return None
-    
+
 def price_tracker_worker():
     global WATCHED_ITEMS, CART_ITEMS
     while True:
