@@ -32,7 +32,7 @@ from curl_cffi import requests as curl_requests
 werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.ERROR)
 
-VERSION = "6.9.7"
+VERSION = "6.9.9"
 load_dotenv()
 
 
@@ -405,6 +405,33 @@ def add_watchlist():
         
     return jsonify({"status": "success", "message": f"Added: {product_title} (Target: ₹{target_price:,.0f})"})
 
+@app.route("/update_watchlist", methods=["POST"])
+def update_watchlist():
+    global WATCHED_ITEMS
+    data = request.json or {}
+    url = data.get("url", "").strip()
+    try:
+        target_price = float(data.get("target_price", 0) or 0)
+    except ValueError:
+        target_price = 0.0
+
+    if not url:
+        return jsonify({"status": "error", "message": "URL is required"}), 400
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE watchlist SET target_price = %s WHERE url = %s
+        """, (target_price, url))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Database error: {str(e)}"}), 500
+
+    WATCHED_ITEMS = load_watchlist_from_db()
+    return jsonify({"status": "success", "message": f"Updated target price to ₹{target_price:,.0f}"})
+
 @app.route("/delete_watchlist", methods=["POST"])
 def delete_watchlist():
     global WATCHED_ITEMS
@@ -725,7 +752,6 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
             elif "flipkart" in url.lower():
                 logger.info("🛒 [CART-STEP 5B] [Flipkart] Searching for 'Add to Cart' selectors...")
                 
-                # Close any login/promo popups if they appear
                 try:
                     close_btn = page.locator("button._2KpZ6l._2doB4z, button._2EdNRl, span._30XB9F").first
                     if close_btn.is_visible(timeout=2000):
@@ -734,7 +760,6 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
                 except:
                     pass
 
-                # Check and handle pincode if blocking
                 try:
                     pincode_input = page.locator("input._3704LK, input[name='pincode']").first
                     if pincode_input.is_visible(timeout=2000):
@@ -787,14 +812,11 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
                 except Exception as e:
                     logger.error(f"❌ [Generic] Cart button search failed: {e}")
             
-            # Take debug screenshot and send directly to Telegram queue
             time.sleep(3)
             screenshot_path = "cart_debug_screenshot.png"
             try:
                 page.screenshot(path=screenshot_path)
                 logger.info("📸 [DEBUG] Screenshot saved.")
-                
-                # Queue mein daal dein taaki Telegram par photo mil jaye
                 caption_text = f"📸 **Cart Debug Screenshot**\n📦 {title}\n🔗 Success: {success}"
                 telegram_photo_queue.put((screenshot_path, caption_text))
             except Exception as sc_err:
@@ -834,7 +856,6 @@ def trigger_add_to_cart(url: str, source_site: str, title: str, price_val: float
 
 def fetch_live_price(url: str) -> Optional[float]:
     try:
-        # Affiliate tracker link ko resolve karke direct product URL banayein
         from deal_sources import resolve_url, canonical_url
         try:
             res_url = resolve_url(url)
@@ -842,21 +863,33 @@ def fetch_live_price(url: str) -> Optional[float]:
         except Exception:
             direct_url = url
 
-        target_fetch_url = direct_url
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Referer": "https://www.google.com/",
+            "ngrok-skip-browser-warning": "true"
+        }
+
+        resp = None
+        # 1. Pehle Bridge URL se try karo agar configured hai
         if BRIDGE_URL:
-            target_fetch_url = f"{BRIDGE_URL}/get-data?url={direct_url}"
-            logger.info(f"🌉 [BRIDGE ROUTE] Routing through Laptop Bridge for direct URL: {direct_url}")
-        
-            headers = {
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                        "Accept-Language": "en-US,en;q=0.9",
-                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                        "Referer": "https://www.google.com/",
-                        "ngrok-skip-browser-warning": "true"  # <--- Yeh line add karni hai!
-                    }
-        
-        resp = requests.get(target_fetch_url, headers=headers, timeout=20)
-        
+            bridge_fetch_url = f"{BRIDGE_URL}/get-data?url={direct_url}"
+            try:
+                logger.info(f"🌉 [BRIDGE ROUTE] Trying Laptop Bridge for URL: {direct_url}")
+                resp = requests.get(bridge_fetch_url, headers=headers, timeout=10)
+                if resp.status_code != 200:
+                    logger.warning(f"⚠️ Bridge returned status {resp.status_code}, falling back to normal direct fetch...")
+                    resp = None
+            except Exception as bridge_err:
+                logger.warning(f"⚠️ Bridge down/failed ({bridge_err}), falling back to normal direct fetch...")
+                resp = None
+
+        # 2. Agar bridge down hai ya BRIDGE_URL nahi hai, toh normal direct fetch karo
+        if resp is None:
+            logger.info(f"🌐 [DIRECT FETCH] Fetching normally for URL: {direct_url}")
+            resp = requests.get(direct_url, headers=headers, timeout=20)
+
         logger.info(f"🔍 [PRICE FETCH] URL: {direct_url} | Status Code: {resp.status_code}")
         
         if resp.status_code != 200:
@@ -865,7 +898,6 @@ def fetch_live_price(url: str) -> Optional[float]:
             
         soup = BeautifulSoup(resp.text, 'html.parser')
         
-        # 1. Flipkart Specific CSS Selectors
         if "flipkart" in direct_url.lower():
             for selector in [".Nx9bqj", "._30jeq3", "._16Jk6d", "._25b18c ._30jeq3"]:
                 elem = soup.select_one(selector)
@@ -879,7 +911,6 @@ def fetch_live_price(url: str) -> Optional[float]:
                         except:
                             pass
 
-        # 2. Amazon Specific Selector
         if "amazon" in direct_url.lower():
             offscreen_elem = soup.select_one(".a-price .a-offscreen")
             if offscreen_elem:
@@ -889,7 +920,6 @@ def fetch_live_price(url: str) -> Optional[float]:
                     if val > 0:
                         return val
 
-        # 3. JSON-LD Structured Data Parsing
         for script in soup.find_all('script', type='application/ld+json'):
             try:
                 data = json.loads(script.string)
@@ -906,7 +936,6 @@ def fetch_live_price(url: str) -> Optional[float]:
             except:
                 pass
 
-        # 4. Meta Tags Fallback
         price_meta = soup.find('meta', property='product:price:amount') or soup.find('meta', property='og:price:amount')
         if price_meta and price_meta.get('content'):
             try:
@@ -916,7 +945,6 @@ def fetch_live_price(url: str) -> Optional[float]:
             except:
                 pass
         
-        # 5. General Regex Fallback
         text_content = soup.get_text()
         prices = re.findall(r'(?:₹|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)', text_content, re.IGNORECASE)
         if prices:
@@ -932,9 +960,7 @@ def fetch_live_price(url: str) -> Optional[float]:
                 return float(min(cleaned_prices))
                 
     except Exception as e:
-        logger.error(f"❌ [BRIDGE FAILED] Could not fetch via bridge. Target: {target_fetch_url} | Error: {str(e)}")
-    return None
-        
+        logger.error(f"❌ [FETCH FAILED] Could not fetch price. Target: {url} | Error: {str(e)}")
     return None
     
 def price_tracker_worker():
@@ -946,8 +972,6 @@ def price_tracker_worker():
             cursor.execute("SELECT title, url, price, target_price FROM watchlist ORDER BY timestamp DESC")
             rows = cursor.fetchall()
             conn.close()
-            
-            updated_watched_list = []
             
             for row in rows:
                 title, url, old_price, target_price = row
@@ -991,14 +1015,6 @@ def price_tracker_worker():
                     except Exception as ex:
                         add_tracker_log(f"Failed to run add-to-cart automation: {ex}", is_error=True)
 
-                updated_watched_list.append({
-                    "title": title[:60] if title else "Watched Item",
-                    "price": str(current_price_str),
-                    "target_price": target_price,
-                    "url": url,
-                    "time": datetime.now(IST).strftime("%H:%M:%S")
-                })
-                
                 add_tracker_log(f"Checked '{title[:25]}': {current_price_str} (Target: ₹{target_price:,.0f})")
             
             WATCHED_ITEMS = load_watchlist_from_db()
@@ -1083,7 +1099,14 @@ async def process_message(event):
         print(f"ℹ️ Skipped generic/invalid title or homepage: {title}")
         return
 
+    # Text se price extract karne ki koshish karein
     price = await asyncio.to_thread(get_offer_price, text, deal_url)
+    
+    # Agar text mein price nahi milti hai, toh live fetcher (bridge + fallback) ka use karein
+    if not isinstance(price, (int, float)) or price <= 0:
+        print(f"ℹ️ Price not found in message text for {deal_url}. Fetching live price...")
+        price = await asyncio.to_thread(fetch_live_price, deal_url)
+
     if not isinstance(price, (int, float)) or price <= 0 or price < MIN_PRICE:
         return
 
