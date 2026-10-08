@@ -32,7 +32,7 @@ from curl_cffi import requests as curl_requests
 werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.ERROR)
 
-VERSION = "6.9.9"
+VERSION = "6.9.10"
 load_dotenv()
 
 
@@ -380,7 +380,7 @@ def add_watchlist():
     except Exception as e:
         print(f"Title scrape error: {e}")
 
-    if not product_title or product_title == "Watched Product" or len(product_title) < 3:
+    if not product_title or product_title.lower() in ("amazon.in", "watched product", "online shopping site in india") or len(product_title) < 3:
         parts = [p for p in url.split('/') if p and p not in ('https:', 'http:', 'www.amazon.in', 'www.flipkart.com', 'dl.flipkart.com', 'dp', 'gp', 'p', 's')]
         if parts:
             longest_part = max(parts, key=len)
@@ -605,13 +605,23 @@ def get_smart_title(text: str, url: Optional[str] = None) -> str:
                 elif soup.find('title'):
                     scraped_title = soup.find('title').get_text().strip()
                 
-                if scraped_title and len(scraped_title) > 3:
+                # Agar scraped title valid hai aur sirf generic homepage nahi hai
+                if scraped_title and len(scraped_title) > 3 and scraped_title.lower() not in ("amazon.in", "online shopping site in india", "online shopping site"):
                     if len(scraped_title) > 100:
                         scraped_title = scraped_title[:97] + "..."
                     return scraped_title
         except Exception as e:
             print(f"URL Title Scraping Error: {e}")
             
+    # Agar ab bhi title nahi mila, toh URL ke path/ASIN se fallback title generate karo
+    if (not title or title == "Unknown Product" or title.lower() in ("amazon.in", "online shopping site in india")) and url:
+        parts = [p for p in url.split('/') if p and p not in ('https:', 'http:', 'www.amazon.in', 'www.flipkart.com', 'dl.flipkart.com', 'dp', 'gp', 'p', 's')]
+        if parts:
+            longest_part = max(parts, key=len)
+            title = longest_part.replace('-', ' ').replace('_', ' ').title()
+        else:
+            title = "Amazon Product Deal"
+
     return title
 
 async def log(msg: str, error: bool = False, send_to_telegram: bool = True):
@@ -1091,11 +1101,11 @@ async def process_message(event):
 
     title = get_smart_title(text, deal_url)
     
+    # Strict check taaki sirf exact homepage/generic title skip ho, valid product titles nahi
     if (not title 
         or title == "Unknown Product" 
-        or "amazon.in" in title.lower() 
-        or "online shopping site" in title.lower()
-        or "flipkart" == title.lower().strip()):
+        or title.lower() in ("amazon.in", "online shopping site in india", "online shopping site")
+        or title.lower() == "flipkart"):
         print(f"ℹ️ Skipped generic/invalid title or homepage: {title}")
         return
 
