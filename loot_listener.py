@@ -847,12 +847,13 @@ def fetch_live_price(url: str) -> Optional[float]:
             target_fetch_url = f"{BRIDGE_URL}/get-data?url={direct_url}"
             logger.info(f"🌉 [BRIDGE ROUTE] Routing through Laptop Bridge for direct URL: {direct_url}")
         
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Referer": "https://www.google.com/"
-        }
+            headers = {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                        "Referer": "https://www.google.com/",
+                        "ngrok-skip-browser-warning": "true"  # <--- Yeh line add karni hai!
+                    }
         
         resp = requests.get(target_fetch_url, headers=headers, timeout=20)
         
