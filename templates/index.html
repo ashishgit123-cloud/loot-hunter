@@ -205,16 +205,9 @@
             box-shadow: 0 4px 15px rgba(0,0,0,0.2);
             height: 420px;
         }
-        .feed-container.collapsed {
-            height: auto !important;
-        }
-        .feed-container.collapsed .feed-list {
-            display: none !important;
-        }
-
-        .metrics-col.collapsed .metrics-body {
-            display: none !important;
-        }
+        .feed-container.collapsed { height: auto !important; }
+        .feed-container.collapsed .feed-list { display: none !important; }
+        .metrics-col.collapsed .metrics-body { display: none !important; }
 
         .feed-header {
             padding: 10px 15px;
@@ -298,12 +291,8 @@
             overflow: hidden;
             box-shadow: inset 0 2px 10px rgba(0,0,0,0.5);
         }
-        .terminal-container.collapsed {
-            height: auto !important;
-        }
-        .terminal-container.collapsed .terminal-body {
-            display: none !important;
-        }
+        .terminal-container.collapsed { height: auto !important; }
+        .terminal-container.collapsed .terminal-body { display: none !important; }
 
         .terminal-header {
             padding: 8px 15px;
@@ -316,10 +305,7 @@
             color: var(--text-muted);
         }
 
-        .terminal-tabs {
-            display: flex;
-            gap: 10px;
-        }
+        .terminal-tabs { display: flex; gap: 10px; }
 
         .terminal-tab {
             background: transparent;
@@ -503,7 +489,6 @@
 
     <div class="dashboard-container">
         <div class="top-section">
-            <!-- Metrics Column with Collapse -->
             <div class="metrics-col" id="metricsCol">
                 <div style="display: flex; justify-content: space-between; align-items: center; padding: 2px 4px;">
                     <span style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; font-weight: bold; letter-spacing: 0.5px;">Metrics</span>
@@ -538,7 +523,6 @@
                 </div>
             </div>
 
-            <!-- Scanned Stream Feed -->
             <div class="feed-container">
                 <div class="feed-header">
                     <h2>🔍 Scanned Stream</h2>
@@ -552,7 +536,6 @@
                 </div>
             </div>
 
-            <!-- Verified Feed -->
             <div class="feed-container">
                 <div class="feed-header">
                     <h2>📢 Verified Feed</h2>
@@ -566,7 +549,6 @@
                 </div>
             </div>
 
-            <!-- Live Price Tracker -->
             <div class="feed-container">
                 <div class="feed-header">
                     <h2>⚡ Live Price Tracker</h2>
@@ -580,7 +562,6 @@
                 </div>
             </div>
 
-            <!-- Added to Cart -->
             <div class="feed-container">
                 <div class="feed-header">
                     <h2>🛒 Added to Cart</h2>
@@ -595,7 +576,6 @@
             </div>
         </div>
 
-        <!-- Terminal Container -->
         <div class="terminal-container">
             <div class="terminal-header">
                 <div class="terminal-tabs">
@@ -692,12 +672,15 @@
             }
         }
 
-        async function promptUpdateWatchlistSettings(url, currentTarget, currentInterval) {
-            let newTargetStr = prompt("Enter new Target Price (e.g. 999):", currentTarget > 0 ? currentTarget : "");
+        async function promptUpdateWatchlistSettings(index) {
+            if (!cachedData || !cachedData.watched_items || !cachedData.watched_items[index]) return;
+            let item = cachedData.watched_items[index];
+            
+            let newTargetStr = prompt("Enter new Target Price (e.g. 999):", item.target_price > 0 ? item.target_price : "");
             if (newTargetStr === null) return;
             let newTarget = parseFloat(newTargetStr) || 0;
 
-            let newIntervalStr = prompt("Enter Check Interval in Minutes (1-60):", currentInterval || 10);
+            let newIntervalStr = prompt("Enter Check Interval in Minutes (1-60):", item.interval_minutes || 10);
             if (newIntervalStr === null) return;
             let newInterval = parseInt(newIntervalStr) || 10;
 
@@ -705,7 +688,7 @@
                 let res = await fetch('/update_watchlist_item', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url: url, target_price: newTarget, interval_minutes: newInterval })
+                    body: JSON.stringify({ url: item.url, target_price: newTarget, interval_minutes: newInterval })
                 });
                 let data = await res.json();
                 alert(data.message || "Updated successfully!");
@@ -715,13 +698,16 @@
             }
         }
 
-        async function deleteWatchlistItem(url) {
+        async function deleteWatchlistItem(index) {
+            if (!cachedData || !cachedData.watched_items || !cachedData.watched_items[index]) return;
+            let item = cachedData.watched_items[index];
+
             if (!confirm("Kya aap is item ko watchlist se delete karna chahte hain?")) return;
             try {
                 let res = await fetch('/delete_watchlist', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url: url })
+                    body: JSON.stringify({ url: item.url })
                 });
                 let data = await res.json();
                 alert(data.message || "Deleted successfully!");
@@ -829,7 +815,7 @@
                     let container = document.getElementById('trackerList');
                     if (cachedData.watched_items.length > 0) {
                         let html = '';
-                        cachedData.watched_items.forEach(item => {
+                        cachedData.watched_items.forEach((item, index) => {
                             let targetPriceText = item.target_price > 0 ? `₹${item.target_price.toLocaleString()}` : 'None';
                             let intervalText = `${item.interval_minutes || 10}m`;
                             html += `
@@ -843,8 +829,8 @@
                                         </div>
                                     </div>
                                     <div style="display: flex; gap: 4px; flex-shrink: 0;">
-                                        <button onclick="promptUpdateWatchlistSettings('${item.url}', ${item.target_price || 0}, ${item.interval_minutes || 10})" title="Edit Settings" style="background: rgba(56,189,248,0.1); border: 1px solid rgba(56,189,248,0.3); color: var(--accent-blue); padding: 5px 8px; border-radius: 6px; cursor: pointer; font-size: 0.85rem;">✏️</button>
-                                        <button onclick="deleteWatchlistItem('${item.url}')" title="Delete Item" style="background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.3); color: var(--accent-red); padding: 5px 8px; border-radius: 6px; cursor: pointer; font-size: 0.85rem;">🗑️</button>
+                                        <button onclick="promptUpdateWatchlistSettings(${index})" title="Edit Settings" style="background: rgba(56,189,248,0.1); border: 1px solid rgba(56,189,248,0.3); color: var(--accent-blue); padding: 5px 8px; border-radius: 6px; cursor: pointer; font-size: 0.85rem;">✏️</button>
+                                        <button onclick="deleteWatchlistItem(${index})" title="Delete Item" style="background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.3); color: var(--accent-red); padding: 5px 8px; border-radius: 6px; cursor: pointer; font-size: 0.85rem;">🗑️</button>
                                     </div>
                                 </div>
                             `;
