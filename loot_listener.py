@@ -408,12 +408,19 @@ def add_watchlist():
 @app.route("/update_watchlist", methods=["POST"])
 def update_watchlist():
     global WATCHED_ITEMS
-    data = request.json or {}
-    url = data.get("url", "").strip()
-    try:
-        target_price = float(data.get("target_price", 0) or 0)
-    except ValueError:
-        target_price = 0.0
+    if request.is_json:
+        data = request.json or {}
+        url = data.get("url", "").strip()
+        try:
+            target_price = float(data.get("target_price", 0) or 0)
+        except ValueError:
+            target_price = 0.0
+    else:
+        url = request.form.get("url", "").strip()
+        try:
+            target_price = float(request.form.get("target_price", 0) or 0)
+        except ValueError:
+            target_price = 0.0
 
     if not url:
         return jsonify({"status": "error", "message": "URL is required"}), 400
@@ -427,9 +434,13 @@ def update_watchlist():
         conn.commit()
         conn.close()
     except Exception as e:
-        return jsonify({"status": "error", "message": f"Database error: {str(e)}"}), 500
+        if request.is_json:
+            return jsonify({"status": "error", "message": f"Database error: {str(e)}"}), 500
+        return f"Database error: {str(e)}", 500
 
     WATCHED_ITEMS = load_watchlist_from_db()
+    if not request.is_json:
+        return redirect("/")
     return jsonify({"status": "success", "message": f"Updated target price to ₹{target_price:,.0f}"})
 
 @app.route("/delete_watchlist", methods=["POST"])
@@ -605,7 +616,6 @@ def get_smart_title(text: str, url: Optional[str] = None) -> str:
                 elif soup.find('title'):
                     scraped_title = soup.find('title').get_text().strip()
                 
-                # Agar scraped title valid hai aur sirf generic homepage nahi hai
                 if scraped_title and len(scraped_title) > 3 and scraped_title.lower() not in ("amazon.in", "online shopping site in india", "online shopping site"):
                     if len(scraped_title) > 100:
                         scraped_title = scraped_title[:97] + "..."
@@ -613,7 +623,6 @@ def get_smart_title(text: str, url: Optional[str] = None) -> str:
         except Exception as e:
             print(f"URL Title Scraping Error: {e}")
             
-    # Agar ab bhi title nahi mila, toh URL ke path/ASIN se fallback title generate karo
     if (not title or title == "Unknown Product" or title.lower() in ("amazon.in", "online shopping site in india")) and url:
         parts = [p for p in url.split('/') if p and p not in ('https:', 'http:', 'www.amazon.in', 'www.flipkart.com', 'dl.flipkart.com', 'dp', 'gp', 'p', 's')]
         if parts:
@@ -698,7 +707,6 @@ async def send_result(result, source, title, price, final_url, min_price_str, av
         except Exception:
             pass
 
-# Setup proper Python logger for Railway console
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
@@ -882,7 +890,6 @@ def fetch_live_price(url: str) -> Optional[float]:
         }
 
         resp = None
-        # 1. Pehle Bridge URL se try karo agar configured hai
         if BRIDGE_URL:
             bridge_fetch_url = f"{BRIDGE_URL}/get-data?url={direct_url}"
             try:
@@ -895,7 +902,6 @@ def fetch_live_price(url: str) -> Optional[float]:
                 logger.warning(f"⚠️ Bridge down/failed ({bridge_err}), falling back to normal direct fetch...")
                 resp = None
 
-        # 2. Agar bridge down hai ya BRIDGE_URL nahi hai, toh normal direct fetch karo
         if resp is None:
             logger.info(f"🌐 [DIRECT FETCH] Fetching normally for URL: {direct_url}")
             resp = requests.get(direct_url, headers=headers, timeout=20)
@@ -1101,7 +1107,6 @@ async def process_message(event):
 
     title = get_smart_title(text, deal_url)
     
-    # Strict check taaki sirf exact homepage/generic title skip ho, valid product titles nahi
     if (not title 
         or title == "Unknown Product" 
         or title.lower() in ("amazon.in", "online shopping site in india", "online shopping site")
@@ -1109,10 +1114,8 @@ async def process_message(event):
         print(f"ℹ️ Skipped generic/invalid title or homepage: {title}")
         return
 
-    # Text se price extract karne ki koshish karein
     price = await asyncio.to_thread(get_offer_price, text, deal_url)
     
-    # Agar text mein price nahi milti hai, toh live fetcher (bridge + fallback) ka use karein
     if not isinstance(price, (int, float)) or price <= 0:
         print(f"ℹ️ Price not found in message text for {deal_url}. Fetching live price...")
         price = await asyncio.to_thread(fetch_live_price, deal_url)

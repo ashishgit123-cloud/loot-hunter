@@ -138,6 +138,12 @@
             gap: 10px;
         }
 
+        .metrics-body {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
         .metric-card {
             background: var(--card-bg);
             border: 1px solid var(--border-color);
@@ -169,6 +175,26 @@
             border-bottom: 1px solid rgba(255,255,255,0.03);
         }
 
+        .collapse-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-muted);
+            width: 22px;
+            height: 22px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .collapse-btn:hover {
+            background: rgba(56, 189, 248, 0.1);
+            color: var(--accent-blue);
+            border-color: rgba(56, 189, 248, 0.3);
+        }
+
         .feed-container {
             background: var(--card-bg);
             border: 1px solid var(--border-color);
@@ -178,6 +204,16 @@
             overflow: hidden;
             box-shadow: 0 4px 15px rgba(0,0,0,0.2);
             height: 420px;
+        }
+        .feed-container.collapsed {
+            height: auto !important;
+        }
+        .feed-container.collapsed .feed-list {
+            display: none !important;
+        }
+
+        .metrics-col.collapsed .metrics-body {
+            display: none !important;
         }
 
         .feed-header {
@@ -261,6 +297,12 @@
             height: 250px;
             overflow: hidden;
             box-shadow: inset 0 2px 10px rgba(0,0,0,0.5);
+        }
+        .terminal-container.collapsed {
+            height: auto !important;
+        }
+        .terminal-container.collapsed .terminal-body {
+            display: none !important;
         }
 
         .terminal-header {
@@ -461,68 +503,91 @@
 
     <div class="dashboard-container">
         <div class="top-section">
-            <div class="metrics-col">
-                <div class="metric-card">
-                    <div class="metric-title">Deals Scanned</div>
-                    <div class="metric-value" id="scannedCount">0</div>
+            <!-- Metrics Column with Collapse -->
+            <div class="metrics-col" id="metricsCol">
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 2px 4px;">
+                    <span style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; font-weight: bold; letter-spacing: 0.5px;">Metrics</span>
+                    <button class="collapse-btn" onclick="toggleMetrics(this)" title="Minimize/Expand">−</button>
                 </div>
-                <div class="metric-card">
-                    <div class="metric-title">Telegram Posted</div>
-                    <div class="metric-value" id="postedCount" style="color: var(--accent-blue);">0</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-title">System Health</div>
-                    <div style="display: flex; flex-direction: column; gap: 4px; margin-top: 4px;">
-                        <div class="health-row">
-                            <span style="color: var(--text-muted);">Channels:</span>
-                            <b id="channelsVal" style="color: var(--accent-blue);">0</b>
-                        </div>
-                        <div class="health-row">
-                            <span style="color: var(--text-muted);">Uptime:</span>
-                            <b id="uptimeVal" style="color: var(--accent-green);">0h 0m</b>
-                        </div>
-                        <div class="health-row">
-                            <span style="color: var(--text-muted);">Cache Size:</span>
-                            <b id="dedupVal" style="color: var(--accent-yellow);">0</b>
+                <div class="metrics-body">
+                    <div class="metric-card">
+                        <div class="metric-title">Deals Scanned</div>
+                        <div class="metric-value" id="scannedCount">0</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-title">Telegram Posted</div>
+                        <div class="metric-value" id="postedCount" style="color: var(--accent-blue);">0</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-title">System Health</div>
+                        <div style="display: flex; flex-direction: column; gap: 4px; margin-top: 4px;">
+                            <div class="health-row">
+                                <span style="color: var(--text-muted);">Channels:</span>
+                                <b id="channelsVal" style="color: var(--accent-blue);">0</b>
+                            </div>
+                            <div class="health-row">
+                                <span style="color: var(--text-muted);">Uptime:</span>
+                                <b id="uptimeVal" style="color: var(--accent-green);">0h 0m</b>
+                            </div>
+                            <div class="health-row">
+                                <span style="color: var(--text-muted);">Cache Size:</span>
+                                <b id="dedupVal" style="color: var(--accent-yellow);">0</b>
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
 
+            <!-- Scanned Stream Feed -->
             <div class="feed-container">
                 <div class="feed-header">
                     <h2>🔍 Scanned Stream</h2>
-                    <span style="font-size: 0.68rem; color: var(--text-muted);" id="scanCountBadge">0 items</span>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-size: 0.68rem; color: var(--text-muted);" id="scanCountBadge">0 items</span>
+                        <button class="collapse-btn" onclick="toggleFeedCard(this)" title="Minimize/Expand">−</button>
+                    </div>
                 </div>
                 <div class="feed-list" id="scannedList">
                     <div class="deal-card scanned"><div class="deal-title">Listening for incoming broadcasts...</div></div>
                 </div>
             </div>
 
+            <!-- Verified Feed -->
             <div class="feed-container">
                 <div class="feed-header">
                     <h2>📢 Verified Feed</h2>
-                    <span style="font-size: 0.68rem; color: var(--text-muted);" id="postCountBadge">0 items</span>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-size: 0.68rem; color: var(--text-muted);" id="postCountBadge">0 items</span>
+                        <button class="collapse-btn" onclick="toggleFeedCard(this)" title="Minimize/Expand">−</button>
+                    </div>
                 </div>
                 <div class="feed-list" id="postedList">
                     <div class="deal-card posted"><div class="deal-title">Waiting for verified deals...</div></div>
                 </div>
             </div>
 
+            <!-- Live Price Tracker -->
             <div class="feed-container">
                 <div class="feed-header">
                     <h2>⚡ Live Price Tracker</h2>
-                    <span style="font-size: 0.68rem; color: var(--text-muted);" id="trackerCountBadge">0 items</span>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-size: 0.68rem; color: var(--text-muted);" id="trackerCountBadge">0 items</span>
+                        <button class="collapse-btn" onclick="toggleFeedCard(this)" title="Minimize/Expand">−</button>
+                    </div>
                 </div>
                 <div class="feed-list" id="trackerList">
                     <div class="deal-card tracker"><div class="deal-title">Tracking watchlist items...</div></div>
                 </div>
             </div>
 
+            <!-- Added to Cart -->
             <div class="feed-container">
                 <div class="feed-header">
                     <h2>🛒 Added to Cart</h2>
-                    <span style="font-size: 0.68rem; color: var(--text-muted);" id="cartCountBadge">0 items</span>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-size: 0.68rem; color: var(--text-muted);" id="cartCountBadge">0 items</span>
+                        <button class="collapse-btn" onclick="toggleFeedCard(this)" title="Minimize/Expand">−</button>
+                    </div>
                 </div>
                 <div class="feed-list" id="cartList">
                     <div class="deal-card posted"><div class="deal-title">No items added to cart yet...</div></div>
@@ -530,13 +595,17 @@
             </div>
         </div>
 
+        <!-- Terminal Container -->
         <div class="terminal-container">
             <div class="terminal-header">
                 <div class="terminal-tabs">
                     <button class="terminal-tab active" onclick="switchLogTab('system')" id="sysTabBtn">💻 System Console Logs</button>
                     <button class="terminal-tab" onclick="switchLogTab('tracker')" id="trkTabBtn">⚡ Price Tracker Logs</button>
                 </div>
-                <span style="font-size: 0.7rem; color: var(--text-muted);" id="logCountBadge">0 logs</span>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="font-size: 0.7rem; color: var(--text-muted);" id="logCountBadge">0 logs</span>
+                    <button class="collapse-btn" onclick="toggleTerminal(this)" title="Minimize/Expand">−</button>
+                </div>
             </div>
             <div class="terminal-body" id="terminalLogs">
                 <div class="log-line">
@@ -565,6 +634,24 @@
     <script>
         let activeLogMode = 'system';
         let cachedData = null;
+
+        function toggleFeedCard(btn) {
+            let container = btn.closest('.feed-container');
+            container.classList.toggle('collapsed');
+            btn.innerText = container.classList.contains('collapsed') ? '+' : '−';
+        }
+
+        function toggleTerminal(btn) {
+            let container = btn.closest('.terminal-container');
+            container.classList.toggle('collapsed');
+            btn.innerText = container.classList.contains('collapsed') ? '+' : '−';
+        }
+
+        function toggleMetrics(btn) {
+            let col = btn.closest('.metrics-col');
+            col.classList.toggle('collapsed');
+            btn.innerText = col.classList.contains('collapsed') ? '+' : '−';
+        }
 
         function toggleChatPopup() {
             let popup = document.getElementById('chatPopup');
