@@ -1,10 +1,15 @@
+"""Data models shared by the Telegram deal evaluation application."""
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
 
 class Verdict(str, Enum):
+    """Possible outcomes of deal evaluation."""
+
     DEAL = "DEAL"
     POSSIBLE_DEAL = "POSSIBLE_DEAL"
     UNKNOWN = "UNKNOWN"
@@ -13,6 +18,8 @@ class Verdict(str, Enum):
 
 @dataclass
 class Offer:
+    """Product offer extracted from a Telegram message."""
+
     title: str
     price: Optional[float]
     url: str
@@ -23,6 +30,8 @@ class Offer:
 
 @dataclass
 class Evidence:
+    """Price evidence collected from supported providers."""
+
     provider: str
     kind: str
     price: Optional[float] = None
@@ -36,6 +45,8 @@ class Evidence:
 
 @dataclass
 class Evaluation:
+    """Final result of evaluating a product deal."""
+
     verdict: Verdict
     confidence: float
     score: Optional[float]

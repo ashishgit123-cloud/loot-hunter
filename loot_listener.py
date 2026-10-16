@@ -27,14 +27,24 @@ import requests
 from bs4 import BeautifulSoup
 import psycopg2
 from curl_cffi import requests as curl_requests
+from deal_models import Verdict, Offer, DealResult
+from deal_storage import (
+    get_db_connection,
+    init_db,
+    load_watchlist_from_db,
+    load_cart_items_from_db,
+    load_keyword_feeds_from_db,
+    save_watchlist_item_to_db,
+    purge_old_deals,
+    save_deal_to_db,
+)
 
 # Suppress Flask/Werkzeug HTTP access logs
 werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.ERROR)
 
-VERSION = "6.9.10"
+VERSION = "6.9.13"
 load_dotenv()
-
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
 API_HASH = os.getenv("TG_API_HASH", "")
@@ -74,125 +84,17 @@ telegram_alert_queue = queue.Queue()
 telegram_photo_queue = queue.Queue()
 
 seen = OrderedDict()
-DEAL_TTL_SECONDS = 7 * 24 * 60 * 60
+TRACKING_ACTIVE = True
 
-class Verdict(Enum):
-    DEAL = "DEAL"
-    POSSIBLE_DEAL = "POSSIBLE_DEAL"
-    NOT_A_DEAL = "NOT_A_DEAL"
 
-class Offer:
-    def __init__(self, title, price, url, source):
-        self.title = title
-        self.price = price
-        self.url = url
-        self.source = source
 
-class DealResult:
-    def __init__(self, verdict: Verdict, confidence: float, reason: str, offer: Offer):
-        self.verdict = verdict
-        self.confidence = confidence
-        self.reason = reason
-        self.offer = offer
 
-def get_db_connection():
-    return psycopg2.connect(DATABASE_URL)
 
-def init_db():
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS historical_deals (
-                deal_id VARCHAR(64) PRIMARY KEY,
-                title TEXT,
-                price TEXT,
-                min_price TEXT,
-                avg_price TEXT,
-                source TEXT,
-                url TEXT,
-                verdict TEXT,
-                timestamp DOUBLE PRECISION
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS watchlist (
-                url TEXT PRIMARY KEY,
-                title TEXT,
-                price TEXT,
-                target_price DOUBLE PRECISION,
-                timestamp DOUBLE PRECISION
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS added_to_cart (
-                url TEXT PRIMARY KEY,
-                title TEXT,
-                price TEXT,
-                timestamp DOUBLE PRECISION
-            )
-        """)
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"Database initialization error: {e}")
 
-init_db()
 
-def load_watchlist_from_db():
-    items = []
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT title, url, price, target_price, timestamp FROM watchlist ORDER BY timestamp DESC")
-        rows = cursor.fetchall()
-        conn.close()
-        for row in rows:
-            title, url, price, target_price, ts = row
-            time_str = datetime.fromtimestamp(ts, IST).strftime("%H:%M:%S") if ts else datetime.now(IST).strftime("%H:%M:%S")
-            items.append({
-                "title": title,
-                "url": url,
-                "price": price,
-                "target_price": target_price if target_price is not None else 0.0,
-                "time": time_str
-            })
-    except Exception as e:
-        print(f"Error loading watchlist from DB: {e}")
-    return items
 
-def load_cart_items_from_db():
-    items = []
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT title, url, price, timestamp FROM added_to_cart ORDER BY timestamp DESC")
-        rows = cursor.fetchall()
-        conn.close()
-        for row in rows:
-            title, url, price, ts = row
-            time_str = datetime.fromtimestamp(ts, IST).strftime("%H:%M:%S") if ts else datetime.now(IST).strftime("%H:%M:%S")
-            items.append({
-                "title": title,
-                "url": url,
-                "price": price,
-                "time": time_str
-            })
-    except Exception as e:
-        print(f"Error loading cart items from DB: {e}")
-    return items
 
-def save_watchlist_item_to_db(title: str, url: str, price: str, target_price: float):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO watchlist (url, title, price, target_price, timestamp)
-        VALUES (%s, %s, %s, %s, %s)
-        ON CONFLICT (url) DO UPDATE SET 
-        title = EXCLUDED.title, price = EXCLUDED.price, target_price = EXCLUDED.target_price, timestamp = EXCLUDED.timestamp
-    """, (url, title, price, target_price, time.time()))
-    conn.commit()
-    conn.close()
+
 
 WATCHED_ITEMS = load_watchlist_from_db()
 CART_ITEMS = load_cart_items_from_db()
@@ -200,8 +102,8 @@ CART_ITEMS = load_cart_items_from_db()
 START_TIME = time.time()
 CHANNELS_COUNT = 0
 DEALS_SCANNED = 0
-RECENT_DEALS = deque(maxlen=20)
-POSTED_DEALS = deque(maxlen=20)
+RECENT_DEALS = deque(maxlen=100)
+POSTED_DEALS = deque(maxlen=100)
 RECENT_LOGS = deque(maxlen=50)
 TRACKER_LOGS = deque(maxlen=50)
 
@@ -219,18 +121,38 @@ def get_uptime_string() -> str:
 
 @app.route("/stats")
 def get_stats():
+    keywords = load_keyword_feeds_from_db()
+    active_kw = keywords[0] if keywords else ""
+    
+    keyword_deals = []
+    if active_kw:
+        for deal in RECENT_DEALS:
+            if active_kw.lower() in deal["title"].lower():
+                keyword_deals.append(deal)
+
     return jsonify({
         "deals_scanned": DEALS_SCANNED,
         "posted_deals": list(POSTED_DEALS),
         "watched_items": WATCHED_ITEMS,
         "cart_items": CART_ITEMS,
+        "keyword_deals": keyword_deals,
+        "active_keyword": active_kw,
         "channels_count": CHANNELS_COUNT,
         "uptime": get_uptime_string(),
         "dedup_size": len(seen),
+        "tracking_active": TRACKING_ACTIVE,
         "recent_deals": list(RECENT_DEALS),
         "recent_logs": list(RECENT_LOGS),
         "tracker_logs": list(TRACKER_LOGS)
     })
+
+@app.route("/toggle_tracking", methods=["POST"])
+def toggle_tracking():
+    global TRACKING_ACTIVE
+    TRACKING_ACTIVE = not TRACKING_ACTIVE
+    status_text = "Resumed" if TRACKING_ACTIVE else "Paused"
+    add_tracker_log(f"Price tracking has been {status_text.lower()} by user.")
+    return jsonify({"status": "success", "tracking_active": TRACKING_ACTIVE})
 
 @app.route("/search")
 def search_db():
@@ -405,22 +327,15 @@ def add_watchlist():
         
     return jsonify({"status": "success", "message": f"Added: {product_title} (Target: ₹{target_price:,.0f})"})
 
-@app.route("/update_watchlist", methods=["POST"])
-def update_watchlist():
+@app.route("/update_watchlist_item", methods=["POST"])
+def update_watchlist_item():
     global WATCHED_ITEMS
-    if request.is_json:
-        data = request.json or {}
-        url = data.get("url", "").strip()
-        try:
-            target_price = float(data.get("target_price", 0) or 0)
-        except ValueError:
-            target_price = 0.0
-    else:
-        url = request.form.get("url", "").strip()
-        try:
-            target_price = float(request.form.get("target_price", 0) or 0)
-        except ValueError:
-            target_price = 0.0
+    data = request.json or {}
+    url = data.get("url", "").strip()
+    try:
+        target_price = float(data.get("target_price", 0) or 0)
+    except ValueError:
+        target_price = 0.0
 
     if not url:
         return jsonify({"status": "error", "message": "URL is required"}), 400
@@ -428,19 +343,13 @@ def update_watchlist():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE watchlist SET target_price = %s WHERE url = %s
-        """, (target_price, url))
+        cursor.execute("UPDATE watchlist SET target_price = %s WHERE url = %s", (target_price, url))
         conn.commit()
         conn.close()
     except Exception as e:
-        if request.is_json:
-            return jsonify({"status": "error", "message": f"Database error: {str(e)}"}), 500
-        return f"Database error: {str(e)}", 500
+        return jsonify({"status": "error", "message": str(e)}), 500
 
     WATCHED_ITEMS = load_watchlist_from_db()
-    if not request.is_json:
-        return redirect("/")
     return jsonify({"status": "success", "message": f"Updated target price to ₹{target_price:,.0f}"})
 
 @app.route("/delete_watchlist", methods=["POST"])
@@ -471,6 +380,23 @@ def delete_watchlist():
         return redirect("/")
     return jsonify({"status": "success", "message": "Item deleted from watchlist"})
 
+@app.route("/add_keyword_feed", methods=["POST"])
+def add_keyword_feed():
+    data = request.json or {}
+    kw = data.get("keyword", "").strip().lower()
+    if not kw:
+        return jsonify({"status": "error", "message": "Keyword is required"}), 400
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM keyword_feeds")
+        cursor.execute("INSERT INTO keyword_feeds (keyword) VALUES (%s) ON CONFLICT (keyword) DO NOTHING", (kw,))
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "success", "message": f"Product feed set for: {kw}"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 @app.route("/export")
 def export_deals_csv():
     try:
@@ -496,41 +422,14 @@ def run_web():
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
-def purge_old_deals():
-    try:
-        cutoff = time.time() - DEAL_TTL_SECONDS
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM historical_deals WHERE timestamp < %s", (cutoff,))
-        conn.commit()
-        conn.close()
-    except Exception:
-        pass
 
-def save_deal_to_db(deal_id: str, title: str, price: any, source: str, url: str, verdict: str, min_price: str, avg_price: str):
-    try:
-        purge_old_deals()
-        now = time.time()
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO historical_deals 
-            (deal_id, title, price, min_price, avg_price, source, url, verdict, timestamp)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (deal_id) DO UPDATE SET 
-            price = EXCLUDED.price, min_price = EXCLUDED.min_price, avg_price = EXCLUDED.avg_price, timestamp = EXCLUDED.timestamp
-        """, (deal_id, title, str(price), str(min_price), str(avg_price), source, url, verdict, now))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"PostgreSQL save error: {e}")
 
 def load_deals_from_db_on_startup():
     try:
         purge_old_deals()
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT deal_id, title, price, min_price, avg_price, source, url, verdict, timestamp FROM historical_deals ORDER BY timestamp DESC LIMIT 20")
+        cursor.execute("SELECT deal_id, title, price, min_price, avg_price, source, url, verdict, timestamp FROM historical_deals ORDER BY timestamp DESC LIMIT 100")
         rows = cursor.fetchall()
         conn.close()
         if rows:
@@ -891,10 +790,9 @@ def fetch_live_price(url: str) -> Optional[float]:
 
         resp = None
         if BRIDGE_URL:
-            bridge_fetch_url = f"{BRIDGE_URL}/get-data?url={direct_url}"
             try:
                 logger.info(f"🌉 [BRIDGE ROUTE] Trying Laptop Bridge for URL: {direct_url}")
-                resp = requests.get(bridge_fetch_url, headers=headers, timeout=10)
+                resp = requests.get(BRIDGE_URL.rstrip("/") + "/get-data", params={"url": direct_url}, headers=headers, timeout=10)
                 if resp.status_code != 200:
                     logger.warning(f"⚠️ Bridge returned status {resp.status_code}, falling back to normal direct fetch...")
                     resp = None
@@ -980,8 +878,11 @@ def fetch_live_price(url: str) -> Optional[float]:
     return None
     
 def price_tracker_worker():
-    global WATCHED_ITEMS, CART_ITEMS
+    global WATCHED_ITEMS, CART_ITEMS, TRACKING_ACTIVE
     while True:
+        if not TRACKING_ACTIVE:
+            time.sleep(2)
+            continue
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
@@ -990,6 +891,8 @@ def price_tracker_worker():
             conn.close()
             
             for row in rows:
+                if not TRACKING_ACTIVE:
+                    break
                 title, url, old_price, target_price = row
                 target_price = target_price if target_price is not None else 0.0
                 
