@@ -43,7 +43,7 @@ from deal_storage import (
 werkzeug_logger = logging.getLogger('werkzeug')
 werkzeug_logger.setLevel(logging.ERROR)
 
-VERSION = "6.9.13"
+VERSION = "6.9.14"
 load_dotenv()
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -83,7 +83,8 @@ sem = asyncio.Semaphore(MAX_CONCURRENCY)
 telegram_alert_queue = queue.Queue()
 telegram_photo_queue = queue.Queue()
 
-seen = OrderedDict()
+# Cross-channel URL deduplication dictionary
+seen_urls = OrderedDict()
 TRACKING_ACTIVE = True
 
 WATCHED_ITEMS = load_watchlist_from_db()
@@ -129,7 +130,6 @@ def get_stats():
             if active_kw.lower() in deal['title'].lower():
                 keyword_deals.append(deal)
 
-    # Watchlist items ko safely dictionary mein convert karein taaki JS crash na ho
     formatted_watchlist = []
     for item in WATCHED_ITEMS:
         if isinstance(item, dict):
@@ -145,21 +145,21 @@ def get_stats():
     stats_data = {
         'deals_scanned': DEALS_SCANNED,
         'posted_deals': list(POSTED_DEALS),
-        'watched_items': formatted_watchlist,  # Updated safe list
+        'watched_items': formatted_watchlist,
         'cart_items': CART_ITEMS,
         'keyword_feeds': keywords,
         'active_keyword': active_kw,
         'keyword_deals': keyword_deals,
         'channels_count': CHANNELS_COUNT,
         'uptime': get_uptime_string(),
-        'dedup_size': len(seen),
+        'dedup_size': len(seen_urls),
         'tracking_active': TRACKING_ACTIVE,
         'recent_deals': list(RECENT_DEALS),
         'recent_logs': list(RECENT_LOGS),
         'tracker_logs': list(TRACKER_LOGS)
     }
     return jsonify(stats_data)
-    
+
 @app.route("/toggle_tracking", methods=["POST"])
 def toggle_tracking():
     global TRACKING_ACTIVE
@@ -394,7 +394,6 @@ def delete_watchlist():
         return redirect("/")
     return jsonify({"status": "success", "message": "Item deleted from watchlist"})
 
-# Keyword Feed Endpoints (PostgreSQL Integrated)
 @app.route('/add_keyword_feed', methods=['POST'])
 def add_keyword_feed():
     data = request.get_json() or {}
@@ -487,17 +486,19 @@ def load_deals_from_db_on_startup():
     except Exception as e:
         print(f"Cache load error: {e}")
 
-def remember_once(key: str) -> bool:
+def remember_deal_url(deal_url: str) -> bool:
     now = time.time()
     cutoff = now - DEDUP_TTL_SECONDS
-    while seen:
-        first_key = next(iter(seen))
-        if seen[first_key] >= cutoff:
+    while seen_urls:
+        first_url, timestamp = next(iter(seen_urls.items()))
+        if timestamp >= cutoff:
             break
-        seen.popitem(last=False)
-    if key in seen:
+        seen_urls.popitem(last=False)
+
+    base_url = deal_url.split('?')[0].lower().strip()
+    if base_url in seen_urls:
         return False
-    seen[key] = now
+    seen_urls[base_url] = now
     return True
 
 URL_RE = re.compile(r"https?://[^\s<>]+", re.I)
@@ -510,35 +511,9 @@ def urls(text: str) -> list[str]:
             out.append(u)
     return out
 
-def title_from(text: str) -> str:
-    lines = [x.strip() for x in (text or "").splitlines() if x.strip()]
-    for line in lines:
-        low = line.lower()
-        if line.startswith(("http://", "https://")) or re.fullmatch(r"[\d₹$€£,.\s]+", line):
-            continue
-        if any(k in low for k in ("buy now", "click here", "shop now", "limited time")):
-            continue
-        return line[:300]
-    return "Unknown Product"
-
 def get_smart_title(text: str, url: Optional[str] = None) -> str:
-    title = title_from(text)
-    
-    generic_keywords = [
-        "off", "discount", "sale", "upto", "flat", 
-        "price drop", "lowest price", "loot", "deal", "save", "time to shine"
-    ]
-    
-    is_generic = (
-        not title 
-        or title == "Unknown Product" 
-        or len(title) < 5 
-        or "loot @" in title.lower() 
-        or "deal @" in title.lower()
-        or any(k in title.lower() for k in generic_keywords)
-    )
-    
-    if is_generic and url:
+    scraped_title = ""
+    if url:
         try:
             from deal_sources import resolve_url, canonical_url
             res_url = resolve_url(url)
@@ -550,28 +525,30 @@ def get_smart_title(text: str, url: Optional[str] = None) -> str:
             resp = requests.get(final_url, headers=headers, timeout=6)
             if resp.status_code == 200:
                 soup = BeautifulSoup(resp.text, 'html.parser')
-                scraped_title = ""
                 if soup.find('meta', property='og:title'):
                     scraped_title = soup.find('meta', property='og:title')['content'].strip()
                 elif soup.find('title'):
                     scraped_title = soup.find('title').get_text().strip()
-                
-                if scraped_title and len(scraped_title) > 3 and scraped_title.lower() not in ("amazon.in", "online shopping site in india", "online shopping site"):
-                    if len(scraped_title) > 100:
-                        scraped_title = scraped_title[:97] + "..."
-                    return scraped_title
         except Exception as e:
-            print(f"URL Title Scraping Error: {e}")
+            print(f"Product Title Scraping Error: {e}")
             
-    if (not title or title == "Unknown Product" or title.lower() in ("amazon.in", "online shopping site in india")) and url:
-        parts = [p for p in url.split('/') if p and p not in ('https:', 'http:', 'www.amazon.in', 'www.flipkart.com', 'dl.flipkart.com', 'dp', 'gp', 'p', 's')]
-        if parts:
-            longest_part = max(parts, key=len)
-            title = longest_part.replace('-', ' ').replace('_', ' ').title()
-        else:
-            title = "Amazon Product Deal"
+    if scraped_title and len(scraped_title) > 3 and scraped_title.lower() not in ("amazon.in", "online shopping site in india", "online shopping site", "flipkart"):
+        if len(scraped_title) > 100:
+            scraped_title = scraped_title[:97] + "..."
+        return scraped_title
 
-    return title
+    if url:
+        try:
+            parts = [p for p in url.split('/') if p and p not in ('https:', 'http:', 'www.amazon.in', 'www.flipkart.com', 'dl.flipkart.com', 'dp', 'gp', 'p', 's')]
+            if parts:
+                longest_part = max(parts, key=len).split('?')[0]
+                clean_name = longest_part.replace('-', ' ').replace('_', ' ').replace('%20', ' ').title()
+                if len(clean_name) > 3:
+                    return clean_name[:100]
+        except Exception:
+            pass
+
+    return "Verified Deal Product"
 
 async def log(msg: str, error: bool = False, send_to_telegram: bool = True):
     prefix = "❌" if error else "ℹ"
@@ -1035,9 +1012,6 @@ async def process_message(event):
         return
 
     source = f"@{chat.username}" if getattr(chat, "username", None) else str(chat.id)
-    message_key = f"{chat.id}:{event.id}:{hashlib.sha256(text.encode()).hexdigest()[:12]}"
-    if not remember_once(message_key):
-        return
 
     from deal_sources import get_offer_price, resolve_url, canonical_url
     
@@ -1049,14 +1023,11 @@ async def process_message(event):
     except Exception:
         deal_url = first_url
 
-    title = get_smart_title(text, deal_url)
-    
-    if (not title 
-        or title == "Unknown Product" 
-        or title.lower() in ("amazon.in", "online shopping site in india", "online shopping site")
-        or title.lower() == "flipkart"):
-        print(f"ℹ️ Skipped generic/invalid title or homepage: {title}")
+    if not remember_deal_url(deal_url):
+        print(f"ℹ️ Duplicate deal skipped (already posted from another channel): {deal_url}")
         return
+
+    title = get_smart_title(text, deal_url)
 
     price = await asyncio.to_thread(get_offer_price, text, deal_url)
     
