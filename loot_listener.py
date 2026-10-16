@@ -113,6 +113,10 @@ app = Flask(__name__)
 def index():
     return render_template("index.html")
 
+@app.route('/favicon.ico')
+def favicon():
+    return '', 204
+    
 def get_uptime_string() -> str:
     seconds = int(time.time() - START_TIME)
     hours, remainder = divmod(seconds, 3600)
