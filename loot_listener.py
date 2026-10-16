@@ -79,22 +79,12 @@ if not DATABASE_URL:
 client = TelegramClient(StringSession(TG_SESSION), API_ID, API_HASH)
 sem = asyncio.Semaphore(MAX_CONCURRENCY)
 
-# Thread-safe queue for background Telegram alerts
+# Thread-safe queues for background Telegram alerts
 telegram_alert_queue = queue.Queue()
 telegram_photo_queue = queue.Queue()
 
 seen = OrderedDict()
 TRACKING_ACTIVE = True
-
-
-
-
-
-
-
-
-
-
 
 WATCHED_ITEMS = load_watchlist_from_db()
 CART_ITEMS = load_cart_items_from_db()
@@ -117,12 +107,6 @@ def index():
 def favicon():
     return '', 204
 
-def get_uptime():
-  elapsed = int(time.time() - START_TIME)
-  hours = elapsed // 3600
-  minutes = (elapsed % 3600) // 60
-  return f"{hours}h {minutes}m"
-
 def get_uptime_string() -> str:
     seconds = int(time.time() - START_TIME)
     hours, remainder = divmod(seconds, 3600)
@@ -131,67 +115,37 @@ def get_uptime_string() -> str:
 
 @app.route('/stats')
 def get_stats():
-    # 1. DB se saare keywords load karein
-    keywords = load_keyword_feeds_from_db()  # Maan lijiye ['iphone', 'shoes', 'fan']
-
-    # 2. Frontend se check karein ki user ne kaunsa keyword select kiya hai
+    keywords = load_keyword_feeds_from_db()
     active_kw = request.args.get('keyword', '').strip()
 
-    # Agar koi keyword select nahi kiya, ya galat hai, toh pehla wala default maan lein
     if not active_kw and keywords:
         active_kw = keywords[0]
     elif active_kw not in keywords and keywords:
         active_kw = keywords[0]
 
-    # 3. Sirf active keyword ke hisab se deals filter karein
     keyword_deals = []
     if active_kw:
         for deal in RECENT_DEALS:
             if active_kw.lower() in deal['title'].lower():
                 keyword_deals.append(deal)
 
-    # 4. JSON response mein keywords list aur active_kw bhi bhejein
     stats_data = {
-        'deals_scanned': len(RECENT_DEALS),
-        'posted_deals': POSTED_DEALS,
+        'deals_scanned': DEALS_SCANNED,
+        'posted_deals': list(POSTED_DEALS),
         'watched_items': WATCHED_ITEMS,
+        'cart_items': CART_ITEMS,
+        'keyword_feeds': keywords,
+        'active_keyword': active_kw,
+        'keyword_deals': keyword_deals,
         'channels_count': CHANNELS_COUNT,
-        'uptime': get_uptime(),
-        'dedup_size': len(DEDUP_SET),
+        'uptime': get_uptime_string(),
+        'dedup_size': len(seen),
         'tracking_active': TRACKING_ACTIVE,
-        'recent_logs': SYSTEM_LOGS[-50:],
-        'tracker_logs': TRACKER_LOGS[-50:],
-        'recent_deals': RECENT_DEALS[-100:],
-        'keyword_feeds': keywords,          # Saare keywords ki list
-        'active_keyword': active_kw,        # Abhi ka active keyword
-        'keyword_deals': keyword_deals      # Us active keyword ke filtered deals
+        'recent_deals': list(RECENT_DEALS),
+        'recent_logs': list(RECENT_LOGS),
+        'tracker_logs': list(TRACKER_LOGS)
     }
     return jsonify(stats_data)
-
-    keywords = load_keyword_feeds_from_db()
-    active_kw = keywords[0] if keywords else ""
-    
-    keyword_deals = []
-    if active_kw:
-        for deal in RECENT_DEALS:
-            if active_kw.lower() in deal["title"].lower():
-                keyword_deals.append(deal)
-
-    return jsonify({
-        "deals_scanned": DEALS_SCANNED,
-        "posted_deals": list(POSTED_DEALS),
-        "watched_items": WATCHED_ITEMS,
-        "cart_items": CART_ITEMS,
-        "keyword_deals": keyword_deals,
-        "active_keyword": active_kw,
-        "channels_count": CHANNELS_COUNT,
-        "uptime": get_uptime_string(),
-        "dedup_size": len(seen),
-        "tracking_active": TRACKING_ACTIVE,
-        "recent_deals": list(RECENT_DEALS),
-        "recent_logs": list(RECENT_LOGS),
-        "tracker_logs": list(TRACKER_LOGS)
-    })
 
 @app.route("/toggle_tracking", methods=["POST"])
 def toggle_tracking():
@@ -427,53 +381,50 @@ def delete_watchlist():
         return redirect("/")
     return jsonify({"status": "success", "message": "Item deleted from watchlist"})
 
-# 1. Add Keyword Feed Endpoint (Multiple support)
+# Keyword Feed Endpoints (PostgreSQL Integrated)
 @app.route('/add_keyword_feed', methods=['POST'])
 def add_keyword_feed():
-    data = request.get_json()
+    data = request.get_json() or {}
     keyword = data.get('keyword', '').strip()
     if keyword:
-        conn = sqlite3.connect('database.db')  # Aapka jo bhi DB connection ho
-        c = conn.cursor()
-        # INSERT OR IGNORE taaki duplicate error na aaye
-        c.execute(
-            'INSERT OR IGNORE INTO keyword_feeds (keyword) VALUES (?)',
-            (keyword,),
-        )
-        conn.commit()
-        conn.close()
-        return jsonify(
-            {
+        try:
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute(
+                'INSERT INTO keyword_feeds (keyword) VALUES (%s) ON CONFLICT (keyword) DO NOTHING',
+                (keyword,),
+            )
+            conn.commit()
+            conn.close()
+            return jsonify({
                 'status': 'success',
                 'message': f"Keyword '{keyword}' added successfully!",
-            }
-        )
+            })
+        except Exception as e:
+            return jsonify({'status': 'error', 'message': str(e)}), 500
     return jsonify({'status': 'error', 'message': 'Invalid keyword'}), 400
 
-
-# 2. Delete Keyword Feed Endpoint (New)
 @app.route('/delete_keyword_feed', methods=['POST'])
 def delete_keyword_feed():
-    data = request.get_json()
+    data = request.get_json() or {}
     keyword = data.get('keyword', '').strip()
     if keyword:
-        conn = sqlite3.connect('database.db')
-        c = conn.cursor()
-        # Keyword table se delete karein
-        c.execute('DELETE FROM keyword_feeds WHERE keyword = ?', (keyword,))
-        # Agar keyword_deals table bhi hai, toh uske related deals bhi saaf kar dein
         try:
-            c.execute('DELETE FROM keyword_deals WHERE keyword = ?', (keyword,))
-        except Exception:
-            pass
-        conn.commit()
-        conn.close()
-        return jsonify(
-            {
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute('DELETE FROM keyword_feeds WHERE keyword = %s', (keyword,))
+            try:
+                c.execute('DELETE FROM keyword_deals WHERE keyword = %s', (keyword,))
+            except Exception:
+                pass
+            conn.commit()
+            conn.close()
+            return jsonify({
                 'status': 'success',
                 'message': f"Keyword '{keyword}' and its feeds deleted!",
-            }
-        )
+            })
+        except Exception as e:
+            return jsonify({'status': 'error', 'message': str(e)}), 500
     return jsonify({'status': 'error', 'message': 'Invalid keyword'}), 400
     
 @app.route("/export")
@@ -500,8 +451,6 @@ def export_deals_csv():
 def run_web():
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
-
-
 
 def load_deals_from_db_on_startup():
     try:
