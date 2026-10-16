@@ -116,7 +116,13 @@ def index():
 @app.route('/favicon.ico')
 def favicon():
     return '', 204
-    
+
+def get_uptime():
+  elapsed = int(time.time() - START_TIME)
+  hours = elapsed // 3600
+  minutes = (elapsed % 3600) // 60
+  return f"{hours}h {minutes}m"
+
 def get_uptime_string() -> str:
     seconds = int(time.time() - START_TIME)
     hours, remainder = divmod(seconds, 3600)
@@ -161,7 +167,7 @@ def get_stats():
         'keyword_deals': keyword_deals      # Us active keyword ke filtered deals
     }
     return jsonify(stats_data)
-    
+
     keywords = load_keyword_feeds_from_db()
     active_kw = keywords[0] if keywords else ""
     
