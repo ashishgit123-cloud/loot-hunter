@@ -123,8 +123,45 @@ def get_uptime_string() -> str:
     minutes, secs = divmod(remainder, 60)
     return f"{hours}h {minutes}m"
 
-@app.route("/stats")
+@app.route('/stats')
 def get_stats():
+    # 1. DB se saare keywords load karein
+    keywords = load_keyword_feeds_from_db()  # Maan lijiye ['iphone', 'shoes', 'fan']
+
+    # 2. Frontend se check karein ki user ne kaunsa keyword select kiya hai
+    active_kw = request.args.get('keyword', '').strip()
+
+    # Agar koi keyword select nahi kiya, ya galat hai, toh pehla wala default maan lein
+    if not active_kw and keywords:
+        active_kw = keywords[0]
+    elif active_kw not in keywords and keywords:
+        active_kw = keywords[0]
+
+    # 3. Sirf active keyword ke hisab se deals filter karein
+    keyword_deals = []
+    if active_kw:
+        for deal in RECENT_DEALS:
+            if active_kw.lower() in deal['title'].lower():
+                keyword_deals.append(deal)
+
+    # 4. JSON response mein keywords list aur active_kw bhi bhejein
+    stats_data = {
+        'deals_scanned': len(RECENT_DEALS),
+        'posted_deals': POSTED_DEALS,
+        'watched_items': WATCHED_ITEMS,
+        'channels_count': CHANNELS_COUNT,
+        'uptime': get_uptime(),
+        'dedup_size': len(DEDUP_SET),
+        'tracking_active': TRACKING_ACTIVE,
+        'recent_logs': SYSTEM_LOGS[-50:],
+        'tracker_logs': TRACKER_LOGS[-50:],
+        'recent_deals': RECENT_DEALS[-100:],
+        'keyword_feeds': keywords,          # Saare keywords ki list
+        'active_keyword': active_kw,        # Abhi ka active keyword
+        'keyword_deals': keyword_deals      # Us active keyword ke filtered deals
+    }
+    return jsonify(stats_data)
+    
     keywords = load_keyword_feeds_from_db()
     active_kw = keywords[0] if keywords else ""
     
@@ -384,23 +421,55 @@ def delete_watchlist():
         return redirect("/")
     return jsonify({"status": "success", "message": "Item deleted from watchlist"})
 
-@app.route("/add_keyword_feed", methods=["POST"])
+# 1. Add Keyword Feed Endpoint (Multiple support)
+@app.route('/add_keyword_feed', methods=['POST'])
 def add_keyword_feed():
-    data = request.json or {}
-    kw = data.get("keyword", "").strip().lower()
-    if not kw:
-        return jsonify({"status": "error", "message": "Keyword is required"}), 400
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM keyword_feeds")
-        cursor.execute("INSERT INTO keyword_feeds (keyword) VALUES (%s) ON CONFLICT (keyword) DO NOTHING", (kw,))
+    data = request.get_json()
+    keyword = data.get('keyword', '').strip()
+    if keyword:
+        conn = sqlite3.connect('database.db')  # Aapka jo bhi DB connection ho
+        c = conn.cursor()
+        # INSERT OR IGNORE taaki duplicate error na aaye
+        c.execute(
+            'INSERT OR IGNORE INTO keyword_feeds (keyword) VALUES (?)',
+            (keyword,),
+        )
         conn.commit()
         conn.close()
-        return jsonify({"status": "success", "message": f"Product feed set for: {kw}"})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return jsonify(
+            {
+                'status': 'success',
+                'message': f"Keyword '{keyword}' added successfully!",
+            }
+        )
+    return jsonify({'status': 'error', 'message': 'Invalid keyword'}), 400
 
+
+# 2. Delete Keyword Feed Endpoint (New)
+@app.route('/delete_keyword_feed', methods=['POST'])
+def delete_keyword_feed():
+    data = request.get_json()
+    keyword = data.get('keyword', '').strip()
+    if keyword:
+        conn = sqlite3.connect('database.db')
+        c = conn.cursor()
+        # Keyword table se delete karein
+        c.execute('DELETE FROM keyword_feeds WHERE keyword = ?', (keyword,))
+        # Agar keyword_deals table bhi hai, toh uske related deals bhi saaf kar dein
+        try:
+            c.execute('DELETE FROM keyword_deals WHERE keyword = ?', (keyword,))
+        except Exception:
+            pass
+        conn.commit()
+        conn.close()
+        return jsonify(
+            {
+                'status': 'success',
+                'message': f"Keyword '{keyword}' and its feeds deleted!",
+            }
+        )
+    return jsonify({'status': 'error', 'message': 'Invalid keyword'}), 400
+    
 @app.route("/export")
 def export_deals_csv():
     try:

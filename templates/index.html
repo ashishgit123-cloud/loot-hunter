@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Loot Bot Command Center</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
+
 <body>
 
     <header>
@@ -28,8 +30,10 @@
 
         <div class="top-section">
             <div class="metrics-col" id="metricsCol">
-                <div style="display: flex; justify-content: space-between; align-items: center; padding: 0 12px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 8px; height: 44px;">
-                    <span style="font-size: 0.75rem; color: var(--accent-blue); text-transform: uppercase; font-weight: bold;">Metrics</span>
+                <div
+                    style="display: flex; justify-content: space-between; align-items: center; padding: 0 12px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 8px; height: 44px;">
+                    <span
+                        style="font-size: 0.75rem; color: var(--accent-blue); text-transform: uppercase; font-weight: bold;">Metrics</span>
                     <button class="collapse-btn" onclick="toggleMetrics(this)" title="Minimize/Expand">−</button>
                 </div>
                 <div class="metrics-body" style="margin-top: 5px;">
@@ -71,7 +75,9 @@
                     </div>
                 </div>
                 <div class="feed-list" id="scannedList">
-                    <div class="deal-card scanned"><div class="deal-title">Listening for incoming broadcasts...</div></div>
+                    <div class="deal-card scanned">
+                        <div class="deal-title">Listening for incoming broadcasts...</div>
+                    </div>
                 </div>
             </div>
 
@@ -85,7 +91,9 @@
                     </div>
                 </div>
                 <div class="feed-list" id="postedList">
-                    <div class="deal-card posted"><div class="deal-title">Waiting for verified deals...</div></div>
+                    <div class="deal-card posted">
+                        <div class="deal-title">Waiting for verified deals...</div>
+                    </div>
                 </div>
             </div>
 
@@ -94,26 +102,33 @@
                 <div class="feed-header">
                     <h2>⚡ Live Price Tracker</h2>
                     <div style="display: flex; align-items: center; gap: 8px;">
-                        <span style="font-size: 0.68rem; color: var(--text-muted);" id="trackerCountBadge">0 items</span>
+                        <span style="font-size: 0.68rem; color: var(--text-muted);" id="trackerCountBadge">0
+                            items</span>
                         <button class="collapse-btn" onclick="toggleFeedCard(this)" title="Minimize/Expand">−</button>
                     </div>
                 </div>
                 <div class="feed-list" id="trackerList">
-                    <div class="deal-card tracker"><div class="deal-title">Tracking watchlist items...</div></div>
+                    <div class="deal-card tracker">
+                        <div class="deal-title">Tracking watchlist items...</div>
+                    </div>
                 </div>
             </div>
 
             <!-- Custom Product Keyword Feed -->
-            <div class="feed-container" id="keywordFeedContainer">
+            <div class="feed-container" id="keywordFeedCard">
                 <div class="feed-header">
-                    <h2 id="keywordFeedTitle">📦 Product Custom Feed</h2>
-                    <div style="display: flex; align-items: center; gap: 8px;">
-                        <span style="font-size: 0.68rem; color: var(--text-muted);" id="keywordCountBadge">0 items</span>
-                        <button class="collapse-btn" onclick="toggleFeedCard(this)" title="Minimize/Expand">−</button>
-                    </div>
+                    <h3 id="keywordFeedTitle">📦 Product Custom Feeds</h3>
+                    <span class="badge" id="keywordCountBadge">0 items</span>
                 </div>
+
+                <!-- Yeh naya container hai jahan saare keywords chips/tabs ki tarah dikhenge -->
+                <div id="keywordTagsContainer"
+                    style="display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px; background: rgba(255,255,255,0.02); border-bottom: 1px solid var(--border-color);">
+                    <!-- Dynamic JavaScript yahan chips inject karega -->
+                </div>
+
                 <div class="feed-list" id="keywordList">
-                    <div class="deal-card scanned"><div class="deal-title">Add product feeds via top button...</div></div>
+                    <!-- Deals yahan load honge -->
                 </div>
             </div>
 
@@ -127,7 +142,9 @@
                     </div>
                 </div>
                 <div class="feed-list" id="cartList">
-                    <div class="deal-card posted"><div class="deal-title">No items added to cart yet...</div></div>
+                    <div class="deal-card posted">
+                        <div class="deal-title">No items added to cart yet...</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -136,8 +153,10 @@
         <div class="terminal-container">
             <div class="terminal-header">
                 <div class="terminal-tabs">
-                    <button class="terminal-tab active" onclick="switchLogTab('system')" id="sysTabBtn">💻 System Console Logs</button>
-                    <button class="terminal-tab" onclick="switchLogTab('tracker')" id="trkTabBtn">⚡ Price Tracker Logs</button>
+                    <button class="terminal-tab active" onclick="switchLogTab('system')" id="sysTabBtn">💻 System
+                        Console Logs</button>
+                    <button class="terminal-tab" onclick="switchLogTab('tracker')" id="trkTabBtn">⚡ Price Tracker
+                        Logs</button>
                 </div>
                 <div style="display: flex; align-items: center; gap: 10px;">
                     <span style="font-size: 0.7rem; color: var(--text-muted);" id="logCountBadge">0 logs</span>
@@ -160,14 +179,17 @@
             <button class="chat-close-btn" onclick="toggleChatPopup()">✖</button>
         </div>
         <div class="chat-popup-body" id="chatBox">
-            <div class="chat-msg bot-msg">Hello! Main aapka AI Assistant hoon. Aap mujhse kisi bhi product ya deal ke baare mein pooch sakte hain!</div>
+            <div class="chat-msg bot-msg">Hello! Main aapka AI Assistant hoon. Aap mujhse kisi bhi product ya deal ke
+                baare mein pooch sakte hain!</div>
         </div>
         <div class="chat-popup-footer">
-            <input type="text" id="chatInput" class="chat-popup-input" placeholder="Type a message..." onkeypress="handleChatKey(event)">
+            <input type="text" id="chatInput" class="chat-popup-input" placeholder="Type a message..."
+                onkeypress="handleChatKey(event)">
             <button class="chat-popup-send" onclick="sendChatMessage()">Send</button>
         </div>
     </div>
 
- <script src="{{ url_for('static', filename='script.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='script.js') }}" defer></script>
 </body>
+
 </html>
