@@ -229,16 +229,38 @@ async function switchActiveKeyword(kw) {
 async function fetchStats() {
     try {
         let url = '/stats';
-        if (currentKeyword) {
+        if (typeof currentKeyword !== 'undefined' && currentKeyword) {
             url += `?keyword=${encodeURIComponent(currentKeyword)}`;
         }
         let response = await fetch(url);
         cachedData = await response.json();
         
-        // Agar pehli baar load ho raha hai aur active_keyword nahi hai
+        // Agar data nahi aaya toh yahin return ho jaye
+        if (!cachedData) return;
+
         if (!currentKeyword && cachedData.active_keyword) {
             currentKeyword = cachedData.active_keyword;
         }
+
+        // Keyword feeds check (Safe check sath mein)
+        if (cachedData.keyword_feeds) {
+            let tagsContainer = document.getElementById('keywordTagsContainer');
+            if (tagsContainer) {
+                let tagsHtml = '';
+                cachedData.keyword_feeds.forEach(kw => {
+                    let isActive = (cachedData.active_keyword === kw) ? 'border-color: var(--accent-blue); background: rgba(56,189,248,0.1);' : '';
+                    tagsHtml += `
+                        <div style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 20px; font-size: 0.75rem; ${isActive}">
+                            <span style="cursor: pointer;" onclick="switchActiveKeyword('${kw}')">📦 ${kw}</span>
+                            <button onclick="deleteKeywordFeed('${kw}')" title="Delete Feed" style="background: none; border: none; color: var(--accent-red); cursor: pointer; font-size: 0.8rem; padding: 0; line-height: 1;">❌</button>
+                        </div>
+                    `;
+                });
+                tagsContainer.innerHTML = tagsHtml.length > 0 ? tagsHtml : '<span style="font-size: 0.75rem; color: var(--text-muted);">No keywords tracked yet. Click "+" to add.</span>';
+            }
+        }
+
+        // ... baaki saara code waise hi rahega
 
         document.getElementById('scannedCount').innerText = cachedData.deals_scanned;
         document.getElementById('postedCount').innerText = cachedData.posted_deals ? cachedData.posted_deals.length : 0;
