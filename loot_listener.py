@@ -129,10 +129,23 @@ def get_stats():
             if active_kw.lower() in deal['title'].lower():
                 keyword_deals.append(deal)
 
+    # Watchlist items ko safely dictionary mein convert karein taaki JS crash na ho
+    formatted_watchlist = []
+    for item in WATCHED_ITEMS:
+        if isinstance(item, dict):
+            formatted_watchlist.append(item)
+        elif isinstance(item, (list, tuple)) and len(item) >= 4:
+            formatted_watchlist.append({
+                "title": item[0],
+                "url": item[1],
+                "price": item[2],
+                "target_price": item[3]
+            })
+
     stats_data = {
         'deals_scanned': DEALS_SCANNED,
         'posted_deals': list(POSTED_DEALS),
-        'watched_items': WATCHED_ITEMS,
+        'watched_items': formatted_watchlist,  # Updated safe list
         'cart_items': CART_ITEMS,
         'keyword_feeds': keywords,
         'active_keyword': active_kw,
@@ -146,7 +159,7 @@ def get_stats():
         'tracker_logs': list(TRACKER_LOGS)
     }
     return jsonify(stats_data)
-
+    
 @app.route("/toggle_tracking", methods=["POST"])
 def toggle_tracking():
     global TRACKING_ACTIVE
