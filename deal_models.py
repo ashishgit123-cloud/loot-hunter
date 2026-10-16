@@ -1,4 +1,4 @@
-"""Data models shared by the Telegram deal evaluation application."""
+"""Shared data models for the Telegram deal evaluation application."""
 
 from __future__ import annotations
 
@@ -15,6 +15,9 @@ class Verdict(str, Enum):
     UNKNOWN = "UNKNOWN"
     REJECT = "REJECT"
 
+    # Backward compatibility with older code.
+    NOT_A_DEAL = "REJECT"
+
 
 @dataclass
 class Offer:
@@ -30,7 +33,7 @@ class Offer:
 
 @dataclass
 class Evidence:
-    """Price evidence collected from supported providers."""
+    """Price evidence collected from providers."""
 
     provider: str
     kind: str
@@ -45,7 +48,7 @@ class Evidence:
 
 @dataclass
 class Evaluation:
-    """Final result of evaluating a product deal."""
+    """Detailed result of deal evaluation."""
 
     verdict: Verdict
     confidence: float
@@ -56,3 +59,13 @@ class Evaluation:
     warnings: list[str] = field(default_factory=list)
     canonical_url: Optional[str] = None
     store: Optional[str] = None
+
+
+@dataclass
+class DealResult:
+    """Legacy result model for backward compatibility."""
+
+    verdict: Verdict
+    confidence: float
+    reason: str
+    offer: Offer
