@@ -63,7 +63,7 @@ async function switchActiveKeyword(kw) {
 }
 
 async function deleteKeywordFeed(keyword) {
-    if (!confirm(`Are you sure you want to delete feed for keyword: "${keyword}"?`)) return;
+    if (!confirm(`Kya aap keyword "${keyword}" ka feed delete karna chahte hain?`)) return;
     try {
         let res = await fetch('/delete_keyword_feed', {
             method: 'POST',
@@ -71,17 +71,17 @@ async function deleteKeywordFeed(keyword) {
             body: JSON.stringify({ keyword: keyword })
         });
         let data = await res.json();
-        alert(data.message || "Deleted successfully!");
+        alert(data.message || "Successfully deleted!");
         fetchStats();
     } catch (err) {
-        alert("Failed to delete keyword feed.");
+        alert("Keyword feed delete karne meinasafalta rahi.");
     }
 }
 
 async function promptAddWatchlistWithPrice() {
-    let url = prompt("Enter Product URL to add to Live Watchlist:");
+    let url = prompt("Live Watchlist mein add karne ke liye Product URL enter karein:");
     if (!url) return;
-    let targetPriceStr = prompt("Enter Target Price (e.g. 999):", "0");
+    let targetPriceStr = prompt("Target Price enter karein (jaise 999):", "0");
     if (targetPriceStr === null) return;
     let targetPrice = parseFloat(targetPriceStr) || 0;
 
@@ -92,15 +92,15 @@ async function promptAddWatchlistWithPrice() {
             body: JSON.stringify({ url: url, target_price: targetPrice })
         });
         let data = await res.json();
-        alert(data.message || "Added successfully!");
+        alert(data.message || "Successfully added!");
         fetchStats();
     } catch (err) {
-        alert("Failed to add watchlist item.");
+        alert("Watchlist item add nahi ho saka.");
     }
 }
 
 async function promptAddKeywordFeed() {
-    let kw = prompt("Enter product keyword to track in custom feed (e.g. 'fan', 'shoe', 'iphone'):");
+    let kw = prompt("Custom feed mein track karne ke liye product keyword enter karein (jaise 'fan', 'shoe', 'iphone'):");
     if (!kw) return;
     try {
         let res = await fetch('/add_keyword_feed', {
@@ -112,7 +112,7 @@ async function promptAddKeywordFeed() {
         alert(data.message || "Product feed added!");
         fetchStats();
     } catch (err) {
-        alert("Failed to add product feed.");
+        alert("Product feed add karne meinasafalta rahi.");
     }
 }
 
@@ -120,7 +120,7 @@ async function promptUpdateWatchlistSettings(index) {
     if (!cachedData || !cachedData.watched_items || !cachedData.watched_items[index]) return;
     let item = cachedData.watched_items[index];
     
-    let newTargetStr = prompt("Enter new Target Price (e.g. 999):", item.target_price > 0 ? item.target_price : "");
+    let newTargetStr = prompt("Naya Target Price enter karein (jaise 999):", item.target_price > 0 ? item.target_price : "");
     if (newTargetStr === null) return;
     let newTarget = parseFloat(newTargetStr) || 0;
 
@@ -131,10 +131,10 @@ async function promptUpdateWatchlistSettings(index) {
             body: JSON.stringify({ url: item.url, target_price: newTarget })
         });
         let data = await res.json();
-        alert(data.message || "Updated successfully!");
+        alert(data.message || "Successfully updated!");
         fetchStats();
     } catch (err) {
-        alert("Failed to update item settings.");
+        alert("Settings update nahi ho saki.");
     }
 }
 
@@ -142,7 +142,7 @@ async function deleteWatchlistItem(index) {
     if (!cachedData || !cachedData.watched_items || !cachedData.watched_items[index]) return;
     let item = cachedData.watched_items[index];
 
-    if (!confirm("Are you sure you want to delete this watchlist item?")) return;
+    if (!confirm("Kya aap is watchlist item ko delete karna chahte hain?")) return;
     try {
         let res = await fetch('/delete_watchlist', {
             method: 'POST',
@@ -150,10 +150,10 @@ async function deleteWatchlistItem(index) {
             body: JSON.stringify({ url: item.url })
         });
         let data = await res.json();
-        alert(data.message || "Deleted successfully!");
+        alert(data.message || "Successfully deleted!");
         fetchStats();
     } catch (err) {
-        alert("Failed to delete item.");
+        alert("Item delete nahi ho saka.");
     }
 }
 
@@ -163,7 +163,7 @@ async function toggleTracking() {
         let data = await res.json();
         updateTrackingUI(data.tracking_active);
     } catch (err) {
-        console.error("Failed to toggle tracking:", err);
+        console.error("Tracking toggle karne meinasafalta:", err);
     }
 }
 
@@ -196,7 +196,7 @@ async function fetchStats() {
             currentKeyword = cachedData.active_keyword;
         }
 
-        // Keyword Feeds & Chips Render
+        // 1. Keyword Feeds & Chips Render
         if (cachedData.keyword_feeds) {
             let tagsContainer = document.getElementById('keywordTagsContainer');
             if (tagsContainer) {
@@ -214,7 +214,7 @@ async function fetchStats() {
             }
         }
 
-        // Metrics update
+        // 2. Metrics update
         if (document.getElementById('scannedCount')) {
             document.getElementById('scannedCount').innerText = cachedData.deals_scanned || 0;
             document.getElementById('postedCount').innerText = cachedData.posted_deals ? cachedData.posted_deals.length : 0;
@@ -227,7 +227,92 @@ async function fetchStats() {
             updateTrackingUI(cachedData.tracking_active);
         }
 
-        // Keyword Deals render
+        // 3. Recent Scanned Deals Render
+        if (cachedData.recent_deals) {
+            let badge = document.getElementById('scanCountBadge');
+            if (badge) badge.innerText = `${cachedData.recent_deals.length} items`;
+            let container = document.getElementById('scannedList');
+            if (container && cachedData.recent_deals.length > 0) {
+                let html = '';
+                cachedData.recent_deals.forEach(deal => {
+                    html += `
+                        <div class="deal-card scanned">
+                            <div class="deal-title"><a href="${deal.url}" target="_blank">${deal.title}</a></div>
+                            <div class="deal-details">
+                                <span>Min: <b>${deal.min_price}</b></span>
+                                <span>Avg: <b>${deal.avg_price}</b></span>
+                            </div>
+                            <div class="deal-footer">
+                                <span class="deal-price">Price: ${deal.price}</span>
+                                <span>${deal.source} • ${deal.time}</span>
+                            </div>
+                        </div>
+                    `;
+                });
+                container.innerHTML = html;
+            }
+        }
+
+        // 4. Posted Deals Render
+        if (cachedData.posted_deals) {
+            let badge = document.getElementById('postCountBadge');
+            if (badge) badge.innerText = `${cachedData.posted_deals.length} items`;
+            let container = document.getElementById('postedList');
+            if (container && cachedData.posted_deals.length > 0) {
+                let html = '';
+                cachedData.posted_deals.forEach(deal => {
+                    html += `
+                        <div class="deal-card posted">
+                            <div class="deal-title"><a href="${deal.url}" target="_blank">${deal.title}</a></div>
+                            <div class="deal-details">
+                                <span>Min: <b>${deal.min_price}</b></span>
+                                <span>Avg: <b>${deal.avg_price}</b></span>
+                            </div>
+                            <div class="deal-footer">
+                                <span class="deal-price">Price: ${deal.price}</span>
+                                <span>${deal.source} • ${deal.time}</span>
+                            </div>
+                        </div>
+                    `;
+                });
+                container.innerHTML = html;
+            }
+        }
+
+        // 5. Live Tracker / Watchlist Render
+        if (cachedData.watched_items) {
+            let badge = document.getElementById('trackerCountBadge');
+            if (badge) badge.innerText = `${cachedData.watched_items.length} items`;
+            let container = document.getElementById('trackerList');
+            if (container) {
+                if (cachedData.watched_items.length > 0) {
+                    let html = '';
+                    cachedData.watched_items.forEach((item, index) => {
+                        let targetPriceText = item.target_price > 0 ? `₹${item.target_price.toLocaleString()}` : 'None';
+                        html += `
+                            <div class="deal-card tracker" style="display: flex; justify-content: space-between; align-items: center;">
+                                <div style="flex-grow: 1; overflow: hidden; margin-right: 8px;">
+                                    <div class="deal-title"><a href="${item.url}" target="_blank">${item.title}</a></div>
+                                    <div class="deal-footer">
+                                        <span class="deal-price">Live: ${item.price}</span>
+                                        <span style="color: var(--accent-yellow);">Target: ${targetPriceText}</span>
+                                    </div>
+                                </div>
+                                <div style="display: flex; gap: 4px; flex-shrink: 0;">
+                                    <button onclick="promptUpdateWatchlistSettings(${index})" title="Edit Settings" style="background: rgba(56,189,248,0.1); border: 1px solid rgba(56,189,248,0.3); color: var(--accent-blue); padding: 5px 8px; border-radius: 6px; cursor: pointer;">✏️</button>
+                                    <button onclick="deleteWatchlistItem(${index})" title="Delete Item" style="background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.3); color: var(--accent-red); padding: 5px 8px; border-radius: 6px; cursor: pointer;">🗑️</button>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    container.innerHTML = html;
+                } else {
+                    container.innerHTML = `<div class="deal-card tracker"><div class="deal-title">Watchlist mein koi item nahi hai...</div></div>`;
+                }
+            }
+        }
+
+        // 6. Keyword Deals Render
         if (cachedData.keyword_deals) {
             let kTitle = cachedData.active_keyword ? `📦 Feed: ${cachedData.active_keyword}` : `📦 Product Custom Feed`;
             let titleEl = document.getElementById('keywordFeedTitle');
@@ -253,7 +338,7 @@ async function fetchStats() {
                     });
                     container.innerHTML = html;
                 } else {
-                    container.innerHTML = `<div class="deal-card scanned"><div class="deal-title">No matching deals for keyword yet...</div></div>`;
+                    container.innerHTML = `<div class="deal-card scanned"><div class="deal-title">Is keyword ke liye koi deal nahi mili...</div></div>`;
                 }
             }
         }
