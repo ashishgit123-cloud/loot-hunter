@@ -239,8 +239,6 @@ async function fetchStats() {
         if (!currentKeyword && cachedData.active_keyword) {
             currentKeyword = cachedData.active_keyword;
         }
-        let response = await fetch('/stats');
-        cachedData = await response.json();
 
         document.getElementById('scannedCount').innerText = cachedData.deals_scanned;
         document.getElementById('postedCount').innerText = cachedData.posted_deals ? cachedData.posted_deals.length : 0;
