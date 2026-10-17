@@ -1,157 +1,228 @@
+
 from __future__ import annotations
 
 import asyncio
 import json
 import re
 from typing import Optional
-from urllib.parse import quote, urljoin, urlparse, urlunparse, parse_qsl, urlencode
+from urllib.parse import (
+    parse_qsl,
+    quote,
+    urlencode,
+    urljoin,
+    urlparse,
+    urlunparse,
+)
 
 import requests
 from bs4 import BeautifulSoup
 
 
-TIMEOUT = 12
-
+# Keep requests short so a slow retailer does not stall processing.
+CONNECT_TIMEOUT = 3.05
+READ_TIMEOUT = 5
+TIMEOUT = (CONNECT_TIMEOUT, READ_TIMEOUT)
+MAX_REDIRECTS = 6
+MAX_HTML_BYTES = 1_200_000
 MIN_PRICE = 1000
 
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36"
+        "Chrome/124.0.0.0 Safari/537.36"
     ),
     "Accept": (
-        "text/html,application/xhtml+xml,application/xml;"
-        "q=0.9,image/avif,image/webp,*/*;q=0.8"
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,*/*;q=0.8"
     ),
-    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Language": "en-IN,en;q=0.9",
+    "Connection": "close",
 }
 
-AMAZON = {
-    "amazon.in",
-    "amazon.com",
-}
+AMAZON = {"amazon.in", "amazon.com"}
+FLIPKART = {"flipkart.com"}
 
-FLIPKART = {
-    "flipkart.com",
-}
-
-SHORT_AMAZON = {
-    "amzn.to",
-}
-
-SHORT_FLIPKART = {
-    "fkrt.co",
-    "fkrt.cc",
-    "fkrt.it",
-}
-
+SHORT_AMAZON = {"amzn.to"}
+SHORT_FLIPKART = {"fkrt.co", "fkrt.cc", "fkrt.it"}
 SHORT_DOMAINS = SHORT_AMAZON | SHORT_FLIPKART
 
 
 def domain(url: str) -> str:
     try:
-        parsed = urlparse(url.strip())
-        host = parsed.hostname or ""
-        return host.lower().lstrip("www.")
-    except Exception:
+        host = urlparse((url or "").strip()).hostname or ""
+        return host.lower().removeprefix("www.")
+    except (ValueError, AttributeError):
         return ""
 
 
 def store_for(url: str) -> Optional[str]:
-    d = domain(url)
-    if d in AMAZON or any(d.endswith("." + x) for x in AMAZON):
+    host = domain(url)
+
+    if host in AMAZON or any(host.endswith("." + d) for d in AMAZON):
         return "amazon"
-    if d in FLIPKART or any(d.endswith("." + x) for x in FLIPKART):
+
+    if host in FLIPKART or any(host.endswith("." + d) for d in FLIPKART):
         return "flipkart"
+
     return None
 
 
 def is_short_url(url: str) -> bool:
-    d = domain(url)
-    return (
-        d in SHORT_DOMAINS
-        or any(d.endswith("." + x) for x in SHORT_DOMAINS)
+    host = domain(url)
+    return host in SHORT_DOMAINS or any(
+        host.endswith("." + d) for d in SHORT_DOMAINS
     )
+
+
+def _valid_http_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+        return (
+            parsed.scheme.lower() in {"http", "https"}
+            and bool(parsed.hostname)
+            and not parsed.username
+            and not parsed.password
+        )
+    except (ValueError, AttributeError):
+        return False
+
+
+def _request_html(url: str, headers: Optional[dict] = None):
+    """
+    Fetch a limited amount of HTML.
+
+    Returns (final_url, status_code, html).
+    Network calls must run in a worker thread when called by async code.
+    """
+    if not _valid_http_url(url):
+        return url, 0, ""
+
+    response = None
+
+    try:
+        response = requests.get(
+            url,
+            headers=headers or HEADERS,
+            timeout=TIMEOUT,
+            allow_redirects=True,
+            stream=True,
+        )
+
+        final_url = response.url or url
+        status = response.status_code
+
+        if not _valid_http_url(final_url):
+            return url, status, ""
+
+        content_type = response.headers.get("Content-Type", "").lower()
+
+        if content_type and not any(
+            kind in content_type
+            for kind in ("text/html", "application/xhtml+xml", "text/plain")
+        ):
+            return final_url, status, ""
+
+        chunks = []
+        size = 0
+
+        for chunk in response.iter_content(chunk_size=16_384):
+            if not chunk:
+                continue
+
+            remaining = MAX_HTML_BYTES - size
+            if remaining <= 0:
+                break
+
+            chunk = chunk[:remaining]
+            chunks.append(chunk)
+            size += len(chunk)
+
+            if size >= MAX_HTML_BYTES:
+                break
+
+        raw = b"".join(chunks)
+        encoding = response.encoding or "utf-8"
+
+        try:
+            html = raw.decode(encoding, errors="replace")
+        except LookupError:
+            html = raw.decode("utf-8", errors="replace")
+
+        return final_url, status, html
+
+    except requests.RequestException:
+        return url, 0, ""
+
+    finally:
+        if response is not None:
+            response.close()
 
 
 def clean_price(value) -> Optional[float]:
-    if value is None:
+    if value is None or isinstance(value, bool):
         return None
 
     text = str(value).replace("₹", "").replace("INR", "").strip()
-    m = re.search(
-        r"\d+(?:,\d{2,3})*(?:\.\d+)?",
-        text,
-    )
+    match = re.search(r"(?<!\d)\d[\d,]*(?:\.\d{1,2})?(?!\d)", text)
 
-    if not m:
+    if not match:
         return None
 
     try:
-        price = float(m.group(0).replace(",", ""))
-        # Filter out numbers that look like percentages or unrealistically low prices (< 50)
-        return price if price > 50 else None
+        price = float(match.group(0).replace(",", ""))
+        return price if 50 < price < 100_000_000 else None
     except (ValueError, TypeError):
         return None
 
 
 def extract_price_from_text(text: str) -> Optional[float]:
     """
-    Extracts deal price from raw Telegram message text or titles.
-    - Ignores percentages (e.g., 80% off, upto 50%).
-    - Ignores cash discounts/off amounts (e.g., 17,250 off, save ₹5000).
-    - Handles currency patterns like ₹629, Rs. 629, @4999, 4,999/-
+    Prefer explicit selling-price formats from a Telegram post.
+    Ignore discount percentages and common cash-discount phrases.
     """
     if not text:
         return None
 
-    # 1. Clean up percentage discount clauses
-    cleaned_text = re.sub(r'\d+\s*%\s*(?:off|discount)?', '', text, flags=re.IGNORECASE)
-    cleaned_text = re.sub(r'(?:upto|flat|save|min|max|extra)\s*\d+\s*%', '', cleaned_text, flags=re.IGNORECASE)
+    cleaned = text
 
-    # 2. Clean up cash discount/off phrases so they aren't mistakenly picked as product price
-    # e.g., "17,250 off", "save ₹5000", "₹2000 discount", "discount of 500"
-    cleaned_text = re.sub(r'(?:off|discount|save|saving|cashback)\b[^,.\n]*?(?:₹|Rs\.?|INR)?\s*[\d,]+(?:\.\d+)?', '', cleaned_text, flags=re.IGNORECASE)
-    cleaned_text = re.sub(r'(?:₹|Rs\.?|INR)?\s*[\d,]+(?:\.\d+)?\b[^,.\n]*?(?:off|discount|saving|cashback)', '', cleaned_text, flags=re.IGNORECASE)
+    # Remove common discount percentages.
+    cleaned = re.sub(
+        r"\b(?:upto|up to|flat|save|extra)?\s*\d+(?:\.\d+)?\s*%"
+        r"(?:\s*(?:off|discount))?\b",
+        " ",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
 
-    # 3. Match strict currency/price patterns for actual selling price
+    # Remove cash-discount amounts so they are not mistaken for selling prices.
+    cleaned = re.sub(
+        r"\b(?:save|saving|cashback|discount|off)\b"
+        r"[^,\n.!|]{0,24}(?:₹|Rs\.?|INR)?\s*[\d,]+(?:\.\d+)?",
+        " ",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+
+    cleaned = re.sub(
+        r"(?:₹|Rs\.?|INR)\s*[\d,]+(?:\.\d+)?"
+        r"\s*(?:off|discount|cashback|saving)\b",
+        " ",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+
     patterns = [
-        r"(?:₹|Rs\.?|INR)\s*(?P<p>[\d,]+(?:\.\d+)?)(?=\b|\s|$)",
-        r"@\s*(?P<p>[\d,]+(?:\.\d+)?)",
-        r"(?P<p>[\d,]+(?:\.\d+)?)\s*/-"
+        r"(?:₹|Rs\.?|INR)\s*(?P<p>\d[\d,]*(?:\.\d{1,2})?)",
+        r"@\s*(?P<p>\d[\d,]*(?:\.\d{1,2})?)",
+        r"(?P<p>\d[\d,]*(?:\.\d{1,2})?)\s*/-",
     ]
 
     for pattern in patterns:
-        match = re.search(pattern, cleaned_text, re.I)
-        if match:
-            raw = match.group("p").rstrip(".")
-            try:
-                price = float(raw.replace(",", ""))
-                if price > 50:  # Valid price threshold
-                    return price
-            except ValueError:
-                continue
-
-    return clean_price(cleaned_text)    
-
-def get_offer_price(text: str, url: Optional[str] = None) -> Optional[float]:
-    """
-    Smart Fallback:
-    1. Extracts price from text safely (ignoring percentages).
-    2. Fallback to live product page scraping if needed.
-    """
-    price = extract_price_from_text(text)
-    if price and price > 0:
-        return price
-
-    if url:
-        resolved = resolve_url(url)
-        if resolved:
-            canonical = canonical_url(resolved) or resolved
-            web_price = fetch_product_price(canonical)
-            if web_price and web_price > 0:
-                return web_price
+        for match in re.finditer(pattern, cleaned, re.IGNORECASE):
+            price = clean_price(match.group("p"))
+            if price:
+                return price
 
     return None
 
@@ -164,75 +235,119 @@ def _meta_refresh_url(html: str, base_url: str) -> Optional[str]:
         soup = BeautifulSoup(html, "html.parser")
         meta = soup.find(
             "meta",
-            attrs={"http-equiv": re.compile(r"refresh", re.I)},
+            attrs={"http-equiv": re.compile(r"^refresh$", re.I)},
         )
 
         if not meta:
             return None
 
         content = meta.get("content", "")
-        match = re.search(r"url\s*=\s*(.+)", content, re.I)
+        match = re.search(r"url\s*=\s*['\"]?(.+?)['\"]?\s*$", content, re.I)
+
         if not match:
             return None
 
-        target = match.group(1).strip(" '\"")
+        target = match.group(1).strip().strip("'\"")
         return urljoin(base_url, target)
+
+    except Exception:
+        return None
+
+
+def _redirect_parameter(html: str, base_url: str) -> Optional[str]:
+    """
+    Inspect only explicit redirect parameters.
+    Do not select arbitrary product links from a page.
+    """
+    try:
+        parsed = urlparse(base_url)
+        params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+
+        keys = {
+            "url", "u", "target", "dest", "destination",
+            "redirect", "redirect_url", "redirect_uri",
+        }
+
+        for key, value in params.items():
+            if key.lower() not in keys or not value:
+                continue
+
+            target = urljoin(base_url, value)
+
+            if _valid_http_url(target) and store_for(target):
+                return target
+
+        return None
     except Exception:
         return None
 
 
 def resolve_url(url: str) -> Optional[str]:
+    """
+    Resolve HTTP redirects, meta refresh and supported canonical URLs.
+    JavaScript-only redirects may not be resolvable with requests.
+    """
     if not url:
         return None
 
     current = url.strip()
     seen: set[str] = set()
 
-    for _ in range(8):
-        if not current:
+    for _ in range(MAX_REDIRECTS):
+        if not _valid_http_url(current) or current in seen:
             return None
-
-        if current in seen:
-            break
 
         seen.add(current)
-        retailer = store_for(current)
-        if retailer:
+
+        if store_for(current):
             return current
 
+        final_url, status, html = _request_html(current)
+
+        if final_url in seen and final_url != current:
+            if store_for(final_url):
+                return final_url
+            return None
+
+        if store_for(final_url):
+            return final_url
+
+        if not html or status < 200 or status >= 400:
+            return None
+
+        meta_target = _meta_refresh_url(html, final_url)
+
+        if meta_target and meta_target not in seen:
+            current = meta_target
+            continue
+
+        param_target = _redirect_parameter(html, final_url)
+
+        if param_target and param_target not in seen:
+            current = param_target
+            continue
+
         try:
-            response = requests.get(
-                current,
-                headers=HEADERS,
-                timeout=TIMEOUT,
-                allow_redirects=True,
+            soup = BeautifulSoup(html, "html.parser")
+            canonical = soup.find(
+                "link",
+                rel=lambda value: (
+                    value
+                    and "canonical" in (
+                        value if isinstance(value, list) else value.split()
+                    )
+                ),
             )
-            final = response.url or current
-            retailer = store_for(final)
-            if retailer:
-                return final
 
-            meta_target = _meta_refresh_url(response.text or "", final)
-            if meta_target and meta_target not in seen:
-                current = meta_target
-                continue
+            if canonical and canonical.get("href"):
+                target = urljoin(final_url, canonical["href"].strip())
 
-            try:
-                soup = BeautifulSoup(response.text or "", "html.parser")
-                canonical_tag = soup.find(
-                    "link",
-                    rel=lambda value: value and "canonical" in value,
-                )
-                if canonical_tag and canonical_tag.get("href"):
-                    canonical_target = urljoin(final, canonical_tag.get("href"))
-                    if canonical_target not in seen and store_for(canonical_target):
-                        return canonical_target
-            except Exception:
-                pass
+                if store_for(target):
+                    return target
+        except Exception:
+            pass
 
-            return None
-        except requests.RequestException:
-            return None
+        return None
 
     return None
 
@@ -243,19 +358,33 @@ def _remove_tracking_parameters(url: str) -> str:
         if not parsed.query:
             return url
 
-        keep = []
         tracking_prefixes = (
             "utm_", "fbclid", "gclid", "ref", "aff",
             "affiliate", "affid", "tag", "irclickid", "mc_",
         )
 
+        kept = []
         for key, value in parse_qsl(parsed.query, keep_blank_values=True):
-            key_lower = key.lower()
-            if any(key_lower == p or key_lower.startswith(p) for p in tracking_prefixes):
-                continue
-            keep.append((key, value))
+            lowered = key.lower()
 
-        return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, urlencode(keep), ""))
+            if any(
+                lowered == prefix or lowered.startswith(prefix)
+                for prefix in tracking_prefixes
+            ):
+                continue
+
+            kept.append((key, value))
+
+        return urlunparse(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                parsed.params,
+                urlencode(kept),
+                "",
+            )
+        )
     except Exception:
         return url
 
@@ -264,24 +393,32 @@ def canonical_url(url: str) -> Optional[str]:
     if not url:
         return None
 
-    store = store_for(url)
-    if not store:
+    retailer = store_for(url)
+    if not retailer:
         return None
 
     url = _remove_tracking_parameters(url)
+    parsed = urlparse(url)
 
-    if store == "amazon":
-        match = re.search(r"/(?:dp|gp/product)/([A-Z0-9]{8,20})", url, re.I)
+    if retailer == "amazon":
+        match = re.search(
+            r"/(?:dp|gp/product)/([A-Z0-9]{8,20})",
+            parsed.path,
+            re.I,
+        )
+
         if match:
             return f"https://www.amazon.in/dp/{match.group(1).upper()}"
-        parsed = urlparse(url)
-        return urlunparse(("https", parsed.netloc or "www.amazon.in", parsed.path, "", parsed.query, ""))
 
-    if store == "flipkart":
-        parsed = urlparse(url)
-        if not parsed.path:
-            return "https://www.flipkart.com"
-        return urlunparse(("https", "www.flipkart.com", parsed.path, "", parsed.query, ""))
+        host = parsed.hostname or "www.amazon.in"
+        return urlunparse(
+            ("https", host, parsed.path, "", parsed.query, "")
+        )
+
+    if retailer == "flipkart":
+        return urlunparse(
+            ("https", "www.flipkart.com", parsed.path, "", parsed.query, "")
+        )
 
     return url
 
@@ -294,125 +431,145 @@ def _walk_json_prices(data, candidates: list[float]) -> None:
                 "currentprice", "finalprice", "saleprice", "offerprice",
             }:
                 price = clean_price(value)
-                if price and price > 50:
+                if price:
                     candidates.append(price)
             else:
                 _walk_json_prices(value, candidates)
+
     elif isinstance(data, list):
         for item in data:
             _walk_json_prices(item, candidates)
 
 
 def extract_page_price(html: str) -> Optional[float]:
+    """
+    Prefer product-specific structured data and retailer selectors.
+    Avoid blindly returning the smallest number found in the entire page.
+    """
     if not html:
         return None
 
     soup = BeautifulSoup(html, "html.parser")
-    candidates: list[float] = []
 
+    # OpenGraph product price.
+    for selector in (
+        'meta[property="product:price:amount"]',
+        'meta[property="og:price:amount"]',
+    ):
+        tag = soup.select_one(selector)
+        if tag and tag.get("content"):
+            price = clean_price(tag["content"])
+            if price:
+                return price
+
+    # Product JSON-LD: inspect Product offers first.
     for script in soup.find_all("script", type="application/ld+json"):
         raw = script.string or script.get_text()
         if not raw:
             continue
+
         try:
             data = json.loads(raw)
-            _walk_json_prices(data, candidates)
         except (ValueError, TypeError):
             continue
 
-    if candidates:
-        return min(candidates)
+        objects = data if isinstance(data, list) else [data]
 
-    patterns = [
-        r'"(?:currentPrice|sellingPrice|finalPrice|salePrice|offerPrice)"\s*:\s*"?(?P<p>[\d,.]+)',
-        r'"(?:selling_price|sellingPrice|selling_price_value)"\s*:\s*"?(?P<p>[\d,.]+)',
-        r'"price"\s*:\s*"?(?P<p>[\d,.]+)',
-    ]
+        for obj in objects:
+            if not isinstance(obj, dict):
+                continue
 
-    for pattern in patterns:
-        for match in re.finditer(pattern, html, re.I):
-            price = clean_price(match.group("p"))
-            if price and price > 50:
-                candidates.append(price)
+            kind = obj.get("@type", "")
+            kinds = kind if isinstance(kind, list) else [kind]
 
-    if candidates:
-        return min(candidates)
+            if "Product" not in kinds:
+                continue
 
-    for pattern in [r"(?:₹|Rs\.?|INR)\s*(?P<p>[\d,]+(?:\.\d+)?)"]:
-        for match in re.finditer(pattern, html, re.I):
-            price = clean_price(match.group("p"))
-            if price and price > 50:
-                candidates.append(price)
+            offers = obj.get("offers", [])
+            offers = offers if isinstance(offers, list) else [offers]
 
-    return min(candidates) if candidates else None
+            for offer in offers:
+                if not isinstance(offer, dict):
+                    continue
+
+                price = clean_price(
+                    offer.get("price")
+                    or offer.get("lowPrice")
+                    or offer.get("priceSpecification", {}).get("price")
+                    if isinstance(offer.get("priceSpecification", {}), dict)
+                    else offer.get("price") or offer.get("lowPrice")
+                )
+
+                if price:
+                    return price
+
+    # Retailer-specific page selectors.
+    selectors = (
+        "span.a-price .a-offscreen",
+        ".apexPriceToPay span.a-offscreen",
+        "#priceblock_dealprice",
+        "#priceblock_ourprice",
+        "div.Nx9bqj",
+        "div._30jeq3",
+        "div._25b18c div._30jeq3",
+        "div._1vC4OE",
+    )
+
+    for selector in selectors:
+        try:
+            element = soup.select_one(selector)
+            if element:
+                price = clean_price(element.get_text(" ", strip=True))
+                if price:
+                    return price
+        except Exception:
+            continue
+
+    # Conservative fallback: price-like metadata only.
+    for tag in soup.find_all("meta"):
+        key = (
+            tag.get("itemprop")
+            or tag.get("property")
+            or tag.get("name")
+            or ""
+        ).lower()
+
+        if key in {"price", "product:price:amount", "twitter:data2"}:
+            price = clean_price(tag.get("content"))
+            if price:
+                return price
+
+    return None
 
 
 def fetch_product_price(url: str) -> Optional[float]:
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-        }
-        resp = requests.get(url, headers=headers, timeout=10)
-        if resp.status_code != 200:
-            return None
-            
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        price_val = 0.0
+    if not store_for(url):
+        return None
 
-        # 1. Amazon Specific Selectors
-        if "amazon" in url.lower():
-            amazon_selectors = [
-                "span.a-price-whole",
-                "span.a-offscreen",
-                "#priceblock_ourprice",
-                "#priceblock_dealprice",
-                ".apexPriceToPay span.a-offscreen"
-            ]
-            for sel in amazon_selectors:
-                element = soup.select_one(sel)
-                if element:
-                    price_text = element.get_text().strip()
-                    clean_price_val = clean_price(price_text)
-                    if clean_price_val and clean_price_val > 50:
-                        price_val = clean_price_val
-                        break
+    final_url, status, html = _request_html(url)
 
-        # 2. Flipkart Specific Selectors
-        elif "flipkart" in url.lower():
-            flipkart_selectors = [
-                "div._30jeq3",
-                "div._25b18c div._30jeq3",
-                "div.Nx9bqj",
-                "div._1vC4OE"
-            ]
-            for sel in flipkart_selectors:
-                element = soup.select_one(sel)
-                if element:
-                    price_text = element.get_text().strip()
-                    clean_price_val = clean_price(price_text)
-                    if clean_price_val and clean_price_val > 50:
-                        price_val = clean_price_val
-                        break
+    if status != 200 or not html or not store_for(final_url):
+        return None
 
-        # 3. Fallback to OpenGraph / Meta tags or general page price extractor if specific selectors miss
-        if price_val == 0.0:
-            meta_price = soup.find('meta', property='product:price:amount') or soup.find('meta', attrs={'name': 'twitter:data2'})
-            if meta_price and meta_price.get('content'):
-                try:
-                    price_val = float(meta_price['content'].strip())
-                except ValueError:
-                    pass
+    return extract_page_price(html)
 
-        if price_val == 0.0:
-            price_val = extract_page_price(resp.text) or 0.0
 
-        return price_val if price_val > 50 else None
+def get_offer_price(text: str, url: Optional[str] = None) -> Optional[float]:
+    """
+    Prefer a price stated in the Telegram post.
+    Page scraping is a fallback and should be called via asyncio.to_thread.
+    """
+    price = extract_price_from_text(text or "")
 
-    except Exception as e:
-        print(f"Fetch price error for {url}: {e}")
-        
+    if price:
+        return price
+
+    if url:
+        resolved = resolve_url(url)
+        if resolved:
+            canonical = canonical_url(resolved) or resolved
+            return fetch_product_price(canonical)
+
     return None
 
 
@@ -424,78 +581,89 @@ def extract_history(html: str) -> dict:
     if not html:
         return {}
 
-    values: list[float] = []
     soup = BeautifulSoup(html, "html.parser")
     text = soup.get_text(" ", strip=True)
+    combined = text + "\n" + html
 
     patterns = [
-        (
-            r"(?:all[-\s]*time\s*low|historical\s*low|lowest\s*price)"
-            r"\s*[:\-]?\s*(?:₹|Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)"
-        ),
-        (
-            r'"(?:lowestPrice|lowest_price|historicalLow|historical_low|'
-            r'allTimeLow|all_time_low|minPrice|min_price)"\s*:\s*"?(?P<p>[\d,.]+)'
-        ),
+        r"(?:all[-\s]time low|historical low|lowest price)"
+        r"\s*[:\-]?\s*(?:₹|Rs\.?|INR)?\s*([\d,]+(?:\.\d+)?)",
+        r'"(?:lowestPrice|lowest_price|historicalLow|historical_low|'
+        r'allTimeLow|all_time_low|minPrice|min_price)"\s*:\s*"?(?P<p>[\d,.]+)',
     ]
 
-    combined = text + "\n" + html
+    values = []
+
     for pattern in patterns:
         for match in re.finditer(pattern, combined, re.I):
-            raw_price = match.groupdict().get("p") if match.groupdict() else match.group(1)
-            price = clean_price(raw_price)
-            if price and price > 50:
+            raw = match.groupdict().get("p") or match.group(1)
+            price = clean_price(raw)
+
+            if price:
                 values.append(price)
 
     if not values:
         return {}
 
+    # This is only a heuristic; the page may contain unrelated prices.
     return {"historical_low": min(values)}
 
 
 def fetch_pricehistory(product_url: str) -> dict:
     try:
-        response = requests.get(
+        _, status, html = _request_html(
             pricehistory_url(product_url),
-            headers={**HEADERS, "Referer": product_url},
-            timeout=TIMEOUT,
-            allow_redirects=True,
+            headers={
+                **HEADERS,
+                "Referer": product_url,
+            },
         )
-        if response.status_code != 200:
+
+        if status != 200 or not html:
             return {}
 
-        data = extract_history(response.text)
-        if data:
-            data["url"] = response.url
-        return data
-    except requests.RequestException:
+        return extract_history(html)
+
+    except Exception:
         return {}
 
 
 async def gather_evidence(product_url: str) -> list[dict]:
+    """
+    Run all network work in threads so it does not block the asyncio loop.
+    Each operation has a timeout and returns no evidence on failure.
+    """
     tasks = [
         asyncio.to_thread(fetch_product_price, product_url),
         asyncio.to_thread(fetch_pricehistory, product_url),
     ]
 
-    page_price, history = await asyncio.gather(*tasks, return_exceptions=True)
-    out: list[dict] = []
+    page_price, history = await asyncio.gather(
+        *tasks,
+        return_exceptions=True,
+    )
+
+    evidence: list[dict] = []
 
     if isinstance(page_price, (int, float)) and page_price > 50:
-        out.append({
-            "provider": "retailer_page",
-            "kind": "current_price",
-            "price": float(page_price),
-            "confidence": 0.70,
-        })
+        evidence.append(
+            {
+                "provider": "retailer_page",
+                "kind": "current_price",
+                "price": float(page_price),
+                "confidence": 0.70,
+            }
+        )
 
     if isinstance(history, dict) and history.get("historical_low"):
-        out.append({
-            "provider": "pricehistory",
-            "kind": "historical",
-            "historical_low": float(history["historical_low"]),
-            "url": history.get("url"),
-            "confidence": 0.65,
-        })
+        evidence.append(
+            {
+                "provider": "pricehistory",
+                "kind": "historical",
+                "historical_low": float(history["historical_low"]),
+                "confidence": 0.65,
+                "url": pricehistory_url(product_url),
+            }
+        )
 
-    return out
+    return evidence

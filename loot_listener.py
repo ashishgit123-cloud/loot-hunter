@@ -512,43 +512,167 @@ def urls(text: str) -> list[str]:
     return out
 
 def get_smart_title(text: str, url: Optional[str] = None) -> str:
+    """
+    Extract a reliable product title.
+
+    Priority:
+    1. Actual product page metadata.
+    2. Meaningful Telegram message text.
+    3. Unknown Product.
+
+    Never treat a short URL code or random URL path
+    as a verified product title.
+    """
+
     scraped_title = ""
+
+    generic_titles = {
+        "amazon",
+        "amazon.in",
+        "online shopping site in india",
+        "online shopping site",
+        "flipkart",
+        "flipkart.com",
+        "just a moment",
+        "page not found",
+        "redirecting",
+        "short url",
+        "404 not found",
+    }
+
     if url:
         try:
-            from deal_sources import resolve_url, canonical_url
-            res_url = resolve_url(url)
-            final_url = canonical_url(res_url) if res_url else url
-            
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/122.0.0.0 Safari/537.36"
+                ),
+                "Accept-Language": "en-IN,en;q=0.9",
             }
-            resp = requests.get(final_url, headers=headers, timeout=6)
-            if resp.status_code == 200:
-                soup = BeautifulSoup(resp.text, 'html.parser')
-                if soup.find('meta', property='og:title'):
-                    scraped_title = soup.find('meta', property='og:title')['content'].strip()
-                elif soup.find('title'):
-                    scraped_title = soup.find('title').get_text().strip()
-        except Exception as e:
-            print(f"Product Title Scraping Error: {e}")
-            
-    if scraped_title and len(scraped_title) > 3 and scraped_title.lower() not in ("amazon.in", "online shopping site in india", "online shopping site", "flipkart"):
-        if len(scraped_title) > 100:
-            scraped_title = scraped_title[:97] + "..."
-        return scraped_title
 
-    if url:
-        try:
-            parts = [p for p in url.split('/') if p and p not in ('https:', 'http:', 'www.amazon.in', 'www.flipkart.com', 'dl.flipkart.com', 'dp', 'gp', 'p', 's')]
-            if parts:
-                longest_part = max(parts, key=len).split('?')[0]
-                clean_name = longest_part.replace('-', ' ').replace('_', ' ').replace('%20', ' ').title()
-                if len(clean_name) > 3:
-                    return clean_name[:100]
-        except Exception:
-            pass
+            # Use the URL already resolved by process_message().
+            resp = requests.get(
+                url,
+                headers=headers,
+                timeout=8,
+                allow_redirects=True,
+            )
 
-    return "Verified Deal Product"
+            final_url = resp.url or url
+            host = (urlparse(final_url).hostname or "").lower()
+
+            short_hosts = {
+                "tinyurl.com",
+                "bit.ly",
+                "t.co",
+                "is.gd",
+                "cutt.ly",
+                "shorturl.at",
+                "rb.gy",
+                "rebrand.ly",
+            }
+
+            # Do not scrape a known short-link landing page
+            # as if it were a product page.
+            if resp.status_code == 200 and not (
+                host in short_hosts
+                or any(host.endswith("." + h) for h in short_hosts)
+            ):
+                soup = BeautifulSoup(resp.text, "html.parser")
+
+                # Prefer Open Graph product/page title.
+                meta = soup.find(
+                    "meta",
+                    property="og:title",
+                )
+
+                if meta:
+                    scraped_title = (
+                        meta.get("content") or ""
+                    ).strip()
+
+                # Fall back to the HTML title.
+                if not scraped_title and soup.title:
+                    scraped_title = soup.title.get_text(
+                        " ",
+                        strip=True,
+                    )
+
+        except Exception as exc:
+            print(f"Product Title Scraping Error: {exc}")
+
+    # Accept only meaningful page titles.
+    if scraped_title:
+        normalized = re.sub(
+            r"\s+",
+            " ",
+            scraped_title,
+        ).strip()
+
+        if (
+            len(normalized) >= 4
+            and normalized.lower() not in generic_titles
+            and not re.fullmatch(
+                r"[\W_]*",
+                normalized,
+            )
+        ):
+            return normalized[:100]
+
+    # Extract a possible title from the Telegram message.
+    message_title = text or ""
+
+    # Remove URLs.
+    message_title = re.sub(
+        r"https?://\S+",
+        " ",
+        message_title,
+        flags=re.IGNORECASE,
+    )
+
+    # Remove prices and common price labels.
+    message_title = re.sub(
+        r"(?:₹|rs\.?|inr)\s*[\d,]+(?:\.\d{1,2})?",
+        " ",
+        message_title,
+        flags=re.IGNORECASE,
+    )
+
+    # Remove common promotional phrases.
+    message_title = re.sub(
+        r"\b("
+        r"loot|loot deal|deal alert|best deal|"
+        r"offer|limited time offer|buy now|"
+        r"price drop|steal deal|free delivery"
+        r")\b",
+        " ",
+        message_title,
+        flags=re.IGNORECASE,
+    )
+
+    message_title = re.sub(
+        r"[\U0001F300-\U0001FAFF"
+        r"\U00002600-\U000027BF]",
+        " ",
+        message_title,
+    )
+
+    message_title = re.sub(
+        r"\s+",
+        " ",
+        message_title,
+    ).strip(" \t\r\n-–|:•")
+
+    # Avoid returning a title made only of noise.
+    if (
+        len(message_title) >= 4
+        and re.search(r"[a-zA-Z]", message_title)
+        and message_title.lower() not in generic_titles
+    ):
+        return message_title[:100]
+
+    return "Unknown Product"
 
 async def log(msg: str, error: bool = False, send_to_telegram: bool = True):
     prefix = "❌" if error else "ℹ"
